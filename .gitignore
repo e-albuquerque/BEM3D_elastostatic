@@ -1,0 +1,18 @@
+# Compiled binaries, objects, and modules
+*.exe
+*.o
+*.mod
+
+# Output files
+*.da
+*_out.*
+fort.*
+disp_trac.dat
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS generated files
+.DS_Store
+Thumbs.db
