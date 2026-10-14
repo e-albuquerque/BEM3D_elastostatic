@@ -20,42 +20,42 @@ The formulation solves 3D linear elastostatics problems using 9-node Lagrangian 
 
 The monolithic Fortran 77 frequency-domain program (`quadtheh.for`) was thoroughly re-engineered into modern Fortran 90 standards and tailored specifically for **pure elastostatics**, eliminating all complex arithmetic overhead:
 
-1. **3D Kelvin Fundamental Solutions**:
-   Employs exact real-valued displacement ($U_{ij}^\ast$) and surface traction ($T_{ij}^\ast$) fundamental solutions for the Kelvin problem in 3D:
+### 1. 3D Kelvin Fundamental Solutions
+Employs exact real-valued displacement ($U_{ij}^\ast$) and surface traction ($T_{ij}^\ast$) fundamental solutions for the Kelvin problem in 3D:
 
-   $$
-   U_{ij}^\ast(x, \xi) = \frac{1}{16\pi (1-\nu)\mu r} \left[ (3 - 4\nu)\delta_{ij} + r_{,i} r_{,j} \right]
-   $$
+$$
+U_{ij}^\ast(x, \xi) = \frac{1}{16\pi (1-\nu)\mu r} \left[ (3 - 4\nu)\delta_{ij} + r_{,i} r_{,j} \right]
+$$
 
-   $$
-   T_{ij}^\ast(x, \xi) = \frac{-1}{8\pi (1-\nu) r^2} \left\{ \frac{\partial r}{\partial n}\left[ (1 - 2\nu)\delta_{ij} + 3 r_{,i} r_{,j} \right] + (1 - 2\nu)\left( n_j r_{,i} - n_i r_{,j} \right) \right\}
-   $$
+$$
+T_{ij}^\ast(x, \xi) = \frac{-1}{8\pi (1-\nu) r^2} \left\{ \frac{\partial r}{\partial n}\left[ (1 - 2\nu)\delta_{ij} + 3 r_{,i} r_{,j} \right] + (1 - 2\nu)\left( n_j r_{,i} - n_i r_{,j} \right) \right\}
+$$
 
-2. **Exact Rigid Body Translation Condition**:
-   The singular diagonal blocks of the influence matrix $H$ (containing the free-term tensor $C_{ij}(\xi)$ and the Cauchy Principal Value of $T_{ij}^\ast$) are determined directly and rigorously by applying rigid body translations ($\{u\} = \{1\}$, $\{t\} = \{0\}$):
+### 2. Exact Rigid Body Translation Condition
+The singular diagonal blocks of the influence matrix $H$ (containing the free-term tensor $C_{ij}(\xi)$ and the Cauchy Principal Value of $T_{ij}^\ast$) are determined directly and rigorously by applying rigid body translations ($\{u\} = \{1\}$, $\{t\} = \{0\}$):
 
-   $$
-   \sum_{j} H_{ij} = 0 \implies H_{ii} = - \sum_{j \neq i} H_{ij}
-   $$
+$$
+\sum_{j} H_{ij} = 0 \implies H_{ii} = - \sum_{j \neq i} H_{ij}
+$$
 
-   This eliminates the need for dynamic frequency sweeps, complex exponentials, and Bessel series expansions (`tdif` / `hdif`).
+This eliminates the need for dynamic frequency sweeps, complex exponentials, and Bessel series expansions (`tdif` / `hdif`).
 
-3. **Pure Real Double Precision (64-bit)**:
-   All arrays and system variables are strictly `real(dp)` (`real64`). This cuts memory consumption in half and avoids all complex number operations.
+### 3. Pure Real Double Precision (64-bit)
+All arrays and system variables are strictly `real(dp)` (`real64`). This cuts memory consumption in half and avoids all complex number operations.
 
-4. **Optimized Linear System Solver (LAPACK `DGESV`)**:
-   Solves the fully populated system matrix using LAPACK's vectorized real double precision solver `DGESV` with partial pivoting.
+### 4. Optimized Linear System Solver (LAPACK `DGESV`)
+Solves the fully populated system matrix using LAPACK's vectorized real double precision solver `DGESV` with partial pivoting.
 
-5. **OpenMP Parallel Collocation Assembly**:
-   The outer collocation loop in `ghmat8` is parallelized across CPU threads using OpenMP (`!$omp parallel do schedule(dynamic)`). Precomputed Gauss quadrature geometries allow assembling the entire 3D mesh in ~1 second.
+### 5. OpenMP Parallel Collocation Assembly
+The outer collocation loop in `ghmat8` is parallelized across CPU threads using OpenMP (`!$omp parallel do schedule(dynamic)`). Precomputed Gauss quadrature geometries allow assembling the entire 3D mesh in ~1 second.
 
-6. **Modern Modular Architecture**:
-   Decomposed into clean, maintainable Fortran modules (`data_mod.f90`, `solver_mod.f90`, `assembly_mod.f90`, `io_mod.f90`, `main.f90`) enforcing `IMPLICIT NONE` and dynamic memory allocation (`ALLOCATABLE`).
+### 6. Modern Modular Architecture
+Decomposed into clean, maintainable Fortran modules (`data_mod.f90`, `solver_mod.f90`, `assembly_mod.f90`, `io_mod.f90`, `main.f90`) enforcing `IMPLICIT NONE` and dynamic memory allocation (`ALLOCATABLE`).
 
-7. **Automated Gmsh & Python Pipeline**:
-   - Seamless conversion from Gmsh quadratic quadrilateral meshes (`quad9`) via `meshio`.
-   - Node-ordering permutation algorithm aligning Gmsh sequencing `[0, 1, 2, 3, 4, 5, 6, 7, 8]` with Dominguez's boundary integration convention `[0, 4, 1, 5, 2, 6, 3, 7, 8]`.
-   - 3D physical surface visualization (`mesh_faces.png`) and automated analytical validation (`result_plot.png`).
+### 7. Automated Gmsh & Python Pipeline
+- Seamless conversion from Gmsh quadratic quadrilateral meshes (`quad9`) via `meshio`.
+- Node-ordering permutation algorithm aligning Gmsh sequencing `[0, 1, 2, 3, 4, 5, 6, 7, 8]` with Dominguez's boundary integration convention `[0, 4, 1, 5, 2, 6, 3, 7, 8]`.
+- 3D physical surface visualization (`mesh_faces.png`) and automated analytical validation (`result_plot.png`).
 
 ---
 
