@@ -2,11 +2,13 @@ program quadesth_modern
   use data_mod
   use solver_mod
   use assembly_mod
+  use stress_mod
   use io_mod
   use, intrinsic :: iso_fortran_env, only: real64
   implicit none
 
   real(dp) :: t_start, t_end, t_assembly_start, t_assembly_end, t_solve_start, t_solve_end
+  real(dp) :: t_stress_start, t_stress_end
   integer :: num_threads
 
   !$ integer, external :: omp_get_max_threads
@@ -15,6 +17,7 @@ program quadesth_modern
   write(*, '(A)') ' QUADESTH Modernized BEM 3D Elastostatics Solver'
   write(*, '(A)') ' Quadratic Elements - Kelvin Fundamental Solution'
   write(*, '(A)') ' OpenMP Parallelization & LAPACK Real Solver (DGESV)'
+  write(*, '(A)') ' Boundary Stresses (Traction-Recovery Method)'
   write(*, '(A)') '============================================================='
 
   num_threads = 1
@@ -51,10 +54,18 @@ program quadesth_modern
   ! 6. Compute internal points & reorganize displacements/tractions
   call inter8()
 
-  ! 7. Write full results to output file
-  call output_data()
+  ! 7. Compute boundary stresses (traction-recovery method)
+  write(*, '(A)', advance='no') ' Computing boundary stresses (Traction-Recovery)... '
+  call cpu_time(t_stress_start)
+  call compute_boundary_stresses()
+  call cpu_time(t_stress_end)
+  write(*, '(A, F6.2, A)') 'done in ', (t_stress_end - t_stress_start), ' s'
 
-  ! 8. Write tracked node displacements and tractions
+  ! 8. Write full results to output file
+  call output_data()
+  call output_boundary_stresses()
+
+  ! 9. Write tracked node displacements and tractions
   call save_disp_trac()
 
   ! Close files
@@ -62,12 +73,13 @@ program quadesth_modern
   close(iout_track)
 
   ! Clean up memory
+  call deallocate_stress_data()
   call deallocate_bem_data()
 
   call cpu_time(t_end)
   write(*, '(A)') '============================================================='
   write(*, '(A, F8.2, A)') ' Computation completed successfully in ', (t_end - t_start), ' s'
-  write(*, '(A)') ' Results exported to: ' // trim(fileout) // ' and ' // trim(filetrack)
+  write(*, '(A)') ' Results exported to: ' // trim(fileout) // ', ' // trim(filestress) // ' and ' // trim(filetrack)
   write(*, '(A)') '============================================================='
 
 end program quadesth_modern

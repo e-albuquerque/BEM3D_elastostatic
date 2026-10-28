@@ -6,7 +6,7 @@
 [![LAPACK](https://img.shields.io/badge/Solver-LAPACK%20DGESV-orange)](https://netlib.org/lapack/)
 [![License](https://img.shields.io/badge/License-MIT%20%2F%20Academic-green)]()
 
-This repository contains a **Fortran 90 / OpenMP / LAPACK** implementation of the **QUADESTH** program: *A Boundary Element code using (QUA)dratic elements for the solution of (E)elasto-(S)tatic (TH)ree-dimensional problems*. 
+This repository contains a **Fortran 90 / OpenMP / LAPACK** implementation of the **QUADESTH** program: *A Boundary Element code using (QUAD)ratic elements for the solution of (E)elasto-(S)tatic (TH)ree-dimensional problems*. 
 
 It is an evolution, modernization, and specialization of the original **QUADTHEH** dynamic code presented by José Dominguez in his textbook:
 
@@ -57,6 +57,27 @@ Decomposed into clean, maintainable Fortran modules (`data_mod.f90`, `solver_mod
 - Node-ordering permutation algorithm aligning Gmsh sequencing `[0, 1, 2, 3, 4, 5, 6, 7, 8]` with Dominguez's boundary integration convention `[0, 4, 1, 5, 2, 6, 3, 7, 8]`.
 - 3D physical surface visualization (`mesh_faces.png`) and automated analytical validation (`result_plot.png`).
 
+### 8. Accurate Boundary Stress Recovery (Traction-Recovery Method)
+Computes the full 3D Cauchy stress tensor ($\sigma_{xx}, \sigma_{yy}, \sigma_{zz}, \sigma_{xy}, \sigma_{yz}, \sigma_{zx}$), principal stresses ($\sigma_1 \ge \sigma_2 \ge \sigma_3$), and Von Mises equivalent stress directly on the boundary:
+- Uses a local orthonormal coordinate frame $(\vec{e}_1, \vec{e}_2, \vec{e}_3)$ on each element surface, where $\vec{e}_3 = \vec{n}$ is the unit normal.
+- Out-of-plane stresses are obtained directly from surface tractions: $\hat{\sigma}_{13} = \hat{t}_1, \hat{\sigma}_{23} = \hat{t}_2, \hat{\sigma}_{33} = \hat{t}_3$.
+- In-plane strains ($\hat{\varepsilon}_{11}, \hat{\varepsilon}_{22}, \hat{\varepsilon}_{12}$) are derived from surface displacement gradients using analytical derivatives of **9-node Lagrangian quadrilateral** and **6-node quadratic triangular** elements (adapted from Gao & Davies, 2001).
+- In-plane stresses are recovered via isotropic Hooke's Law:
+
+$$
+\hat{\sigma}_{11} = \frac{2\mu}{1-\nu}\hat{\varepsilon}_{11} + \frac{2\mu\nu}{1-\nu}\hat{\varepsilon}_{22} + \frac{\nu}{1-\nu}\hat{\sigma}_{33}
+$$
+
+$$
+\hat{\sigma}_{22} = \frac{2\mu}{1-\nu}\hat{\varepsilon}_{22} + \frac{2\mu\nu}{1-\nu}\hat{\varepsilon}_{11} + \frac{\nu}{1-\nu}\hat{\sigma}_{33}
+$$
+
+$$
+\hat{\sigma}_{12} = 2\mu\hat{\varepsilon}_{12}
+$$
+
+- Stresses are transformed back to global coordinates ($\boldsymbol{\sigma} = \mathbf{L}^T \hat{\boldsymbol{\sigma}} \mathbf{L}$) and averaged across adjacent elements at boundary nodes.
+
 ---
 
 ## 📂 Repository Structure
@@ -66,6 +87,7 @@ Decomposed into clean, maintainable Fortran modules (`data_mod.f90`, `solver_mod
 │   ├── main.f90              # Main driver (single-pass static solution)
 │   ├── data_mod.f90          # Global data structures, dynamic arrays, and material constants
 │   ├── assembly_mod.f90      # Parallel assembly (G & H), Gauss quadrature, and Kelvin solutions
+│   ├── stress_mod.f90        # Boundary stress recovery (Traction-Recovery Method, 9-node Lagrange)
 │   ├── solver_mod.f90        # Interface to LAPACK DGESV real linear solver
 │   ├── io_mod.f90            # Flexible file readers, Somigliana internal point solver, and output
 │   ├── quadtheh.for          # Original F77 reference code (frequency domain)
@@ -78,6 +100,7 @@ Decomposed into clean, maintainable Fortran modules (`data_mod.f90`, `solver_mod
 ├── postproc / validation
 │   ├── posproc.py            # Postprocessor: 1D analytical validation and error metrics
 │   ├── disp_trac.dat         # Tracked node displacement and traction output
+│   ├── stresses.dat          # Complete boundary nodal stresses, Von Mises, and principal stresses
 │   ├── cube8.dat             # Simulation input file generated from mesh
 │   ├── cube8_out.dat         # Detailed node displacements, element tractions, and internal points
 │   ├── mesh_faces.png        # 3D boundary mesh faces visualization
@@ -204,11 +227,24 @@ $$
 
 ### Comparison Summary:
 
-| Evaluation Point | Coordinate $z$ | Numerical $u_z$ (QUADESTH) | Analytical $u_z$ | Relative Error |
+#### 1. Displacements and Applied Tractions:
+| Evaluation Point | Coordinate $z$ | Numerical (QUADESTH) | Analytical | Relative Error |
 | :--- | :---: | :---: | :---: | :---: |
-| **Top-center Node 770** | $6.0\text{ m}$ | $2.00044 \times 10^{-4}\text{ m}$ | $2.00000 \times 10^{-4}\text{ m}$ | **0.022 %** |
-| **Internal Point 1** | $3.0\text{ m}$ | $1.00057 \times 10^{-4}\text{ m}$ | $1.00000 \times 10^{-4}\text{ m}$ | **0.057 %** |
+| **Top-center Node 770 ($u_z$)** | $6.0\text{ m}$ | $2.00044 \times 10^{-4}\text{ m}$ | $2.00000 \times 10^{-4}\text{ m}$ | **0.022 %** |
+| **Internal Point 1 ($u_z$)** | $3.0\text{ m}$ | $1.00057 \times 10^{-4}\text{ m}$ | $1.00000 \times 10^{-4}\text{ m}$ | **0.057 %** |
 | **Top Traction $t_z$** | $6.0\text{ m}$ | $100.00000\text{ N/m}^2$ | $100.00000\text{ N/m}^2$ | **0.000 %** |
+
+#### 2. Recovered Boundary Stresses (Traction-Recovery Method):
+| Stress Component | Node / Region | Numerical (QUADESTH) | Analytical | Relative Error |
+| :--- | :---: | :---: | :---: | :---: |
+| **Vertical Stress $\sigma_{zz}$** | Node 770 ($z=6\text{m}$) | $100.0000\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0000 %** |
+| **Lateral Stress $\sigma_{xx}$** | Node 770 ($z=6\text{m}$) | $33.3490\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0469 %** |
+| **Lateral Stress $\sigma_{yy}$** | Node 770 ($z=6\text{m}$) | $33.3382\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0147 %** |
+| **Von Mises Stress $\sigma_{vm}$** | Node 770 ($z=6\text{m}$) | $66.6564\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0154 %** |
+| **Mean $\sigma_{zz}$ (Mesh Average)** | All 866 nodes | $100.0363\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0363 %** |
+| **Mean $\sigma_{xx}$ (Mesh Average)** | All 866 nodes | $33.3321\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0036 %** |
+| **Mean $\sigma_{yy}$ (Mesh Average)** | All 866 nodes | $33.3369\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0108 %** |
+| **Mean $\sigma_{vm}$ (Mesh Average)** | All 866 nodes | $66.7231\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0846 %** |
 
 ![Numerical vs Analytical Validation Plot](result_plot.png)
 
@@ -217,4 +253,5 @@ $$
 ## 📖 References
 
 * **Dominguez, J.** (1993). *Boundary Elements in Dynamics*. Computational Mechanics Publications, Southampton & Boston. ISBN: 1-85312-258-0.
+* **Gao, X.-W., & Davies, T. G.** (2001). *Boundary Element Programming in Mechanics*. Cambridge University Press. ISBN: 978-0521772594.
 * **Brebbia, C. A., & Dominguez, J.** (1992). *Boundary Elements: An Introductory Course*. Computational Mechanics Publications & McGraw-Hill.

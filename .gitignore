@@ -8,6 +8,10 @@
 *_out.*
 fort.*
 disp_trac.dat
+stresses.dat
+
+# Large PDFs / Reference documents
+*.pdf
 
 # Python cache
 __pycache__/
