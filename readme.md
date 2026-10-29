@@ -28,11 +28,11 @@ U_{ij}^\ast(x, \xi) = \frac{1}{16\pi (1-\nu)\mu r} \left[ (3 - 4\nu)\delta_{ij} 
 $$
 
 $$
-T_{ij}^\ast(x, \xi) = \frac{-1}{8\pi (1-\nu) r^2} \left\{ \frac{\partial r}{\partial n}\left[ (1 - 2\nu)\delta_{ij} + 3 r_{,i} r_{,j} \right] + (1 - 2\nu)\left( n_j r_{,i} - n_i r_{,j} \right) \right\}
+T_{ij}^\ast(x, \xi) = \frac{-1}{8\pi (1-\nu) r^2} \left\lbrace \frac{\partial r}{\partial n}\left[ (1 - 2\nu)\delta_{ij} + 3 r_{,i} r_{,j} \right] + (1 - 2\nu)\left( n_j r_{,i} - n_i r_{,j} \right) \right\rbrace
 $$
 
 ### 2. Exact Rigid Body Translation Condition
-The singular diagonal blocks of the influence matrix $H$ (containing the free-term tensor $C_{ij}(\xi)$ and the Cauchy Principal Value of $T_{ij}^\ast$) are determined directly and rigorously by applying rigid body translations ($\{u\} = \{1\}$, $\{t\} = \{0\}$):
+The singular diagonal blocks of the influence matrix $H$ (containing the free-term tensor $C_{ij}(\xi)$ and the Cauchy Principal Value of $T_{ij}^\ast$) are determined directly and rigorously by applying rigid body translations ($\lbrace u \rbrace = \lbrace 1 \rbrace$, $\lbrace t \rbrace = \lbrace 0 \rbrace$):
 
 $$
 \sum_{j} H_{ij} = 0 \implies H_{ii} = - \sum_{j \neq i} H_{ij}
@@ -96,7 +96,7 @@ D_{kij}^\ast = \frac{1}{8\pi (1-\nu) r^2} \left[ (1 - 2\nu) (\delta_{ki} r_{,j} 
 $$
 
 $$
-S_{kij}^\ast = \frac{\mu}{4\pi (1-\nu) r^3} \left\{ 3 \frac{\partial r}{\partial n} \left[ (1 - 2\nu) \delta_{ij} r_{,k} + \nu (\delta_{ki} r_{,j} + \delta_{kj} r_{,i}) - 5 r_{,i} r_{,j} r_{,k} \right] + 3\nu (n_i r_{,j} r_{,k} + n_j r_{,i} r_{,k}) + (1 - 2\nu) (3 n_k r_{,i} r_{,j} + n_j \delta_{ki} + n_i \delta_{kj}) - (1 - 4\nu) n_k \delta_{ij} \right\}
+S_{kij}^\ast = \frac{\mu}{4\pi (1-\nu) r^3} \left\lbrace 3 \frac{\partial r}{\partial n} \left[ (1 - 2\nu) \delta_{ij} r_{,k} + \nu (\delta_{ki} r_{,j} + \delta_{kj} r_{,i}) - 5 r_{,i} r_{,j} r_{,k} \right] + 3\nu (n_i r_{,j} r_{,k} + n_j r_{,i} r_{,k}) + (1 - 2\nu) (3 n_k r_{,i} r_{,j} + n_j \delta_{ki} + n_i \delta_{kj}) - (1 - 4\nu) n_k \delta_{ij} \right\rbrace
 $$
 
 - **Adaptive High-Order Gauss-Legendre Quadrature for Quasi-Singularities**: Precomputes two-tier boundary Gauss-point tables — standard `6x6` (36 pts/elem) for far elements ($d > 3.5 R_e$) and `40x40` (1,600 pts/elem) for near-boundary elements ($d \le 3.5 R_e$) — completely eliminating $1/r^2$ and $1/r^3$ quasi-singular integration errors even for internal nodes very close to the boundary ($d / L_e \approx 0.07$).
