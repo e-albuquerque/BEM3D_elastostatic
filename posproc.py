@@ -89,6 +89,21 @@ def parse_stresses(filename='stresses.dat'):
     data = np.loadtxt(filename)
     return data
 
+def parse_internal_points(filename='internal_points.dat'):
+    """
+    Parses internal points displacements and stresses from internal_points.dat.
+    Col 0: Point ID
+    Col 1-3: X, Y, Z coordinates
+    Col 4-6: u_x, u_y, u_z displacements
+    Col 7-12: Sigma_xx, Sigma_yy, Sigma_zz, Sigma_xy, Sigma_yz, Sigma_zx
+    Col 13: Von Mises Equivalent Stress
+    Col 14-16: Principal Stresses (Sigma_1 >= Sigma_2 >= Sigma_3)
+    """
+    if not os.path.exists(filename):
+        return None
+    data = np.loadtxt(filename)
+    return data
+
 def main():
     L = 6.0          # Comprimento do domínio cúbico (m)
     nu = 0.25        # Coeficiente de Poisson
@@ -137,15 +152,72 @@ def main():
     # 2. Carrega perfil completo de nós a partir de cube8_out.dat
     nodes_coords, nodes_disp, int_pts = parse_cube8_out('cube8_out.dat')
 
-    if int_pts:
-        uz_mid_num = int_pts[1][2]
-        err_uz_mid = abs(uz_mid_num - uz_mid_analyt) / uz_mid_analyt * 100.0
-        print(f"Resultado no Ponto Interno 1 (z = 3.0 m, centro do cubo):")
-        print(f"  Deslocamento u_z = {uz_mid_num:14.6e} m  (Analítico: {uz_mid_analyt:14.6e} m)")
-        print(f"  -> Erro relativo em u_z (meio): {err_uz_mid:.4f} %")
+    # 3. Carrega e valida pontos internos (internal_points.dat)
+    int_pts_data = parse_internal_points('internal_points.dat')
+    has_int_pts = int_pts_data is not None and len(int_pts_data) > 0
+
+    if has_int_pts:
+        pids_int = int_pts_data[:, 0].astype(int)
+        x_int = int_pts_data[:, 1]
+        y_int = int_pts_data[:, 2]
+        z_int = int_pts_data[:, 3]
+        ux_int = int_pts_data[:, 4]
+        uy_int = int_pts_data[:, 5]
+        uz_int = int_pts_data[:, 6]
+        sxx_int = int_pts_data[:, 7]
+        syy_int = int_pts_data[:, 8]
+        szz_int = int_pts_data[:, 9]
+        sxy_int = int_pts_data[:, 10]
+        syz_int = int_pts_data[:, 11]
+        szx_int = int_pts_data[:, 12]
+        svm_int = int_pts_data[:, 13]
+
+        # Ponto interno mais próximo do centro geométrico (3.0, 3.0, 3.0)
+        dist_center = np.sqrt((x_int - 3.0)**2 + (y_int - 3.0)**2 + (z_int - 3.0)**2)
+        idx_c = np.argmin(dist_center)
+        zc = z_int[idx_c]
+        uz_c_exact = (p / M) * zc
+        err_uz_c = abs(uz_int[idx_c] - uz_c_exact) / uz_c_exact * 100.0
+        err_szz_c = abs(szz_int[idx_c] - sig_zz_exact) / sig_zz_exact * 100.0
+        err_sxx_c = abs(sxx_int[idx_c] - sig_xx_exact) / sig_xx_exact * 100.0
+        err_syy_c = abs(syy_int[idx_c] - sig_yy_exact) / sig_yy_exact * 100.0
+        err_svm_c = abs(svm_int[idx_c] - sig_vm_exact) / sig_vm_exact * 100.0
+
+        print(f"Resultados no Ponto Interno Central #{pids_int[idx_c]} (Coord: x={x_int[idx_c]:.3f}, y={y_int[idx_c]:.3f}, z={zc:.3f} m):")
+        print(f"  Deslocamento u_z = {uz_int[idx_c]:14.6e} m  (Analítico: {uz_c_exact:14.6e} m, Erro: {err_uz_c:.4f}%)")
+        print(f"  sigma_zz         = {szz_int[idx_c]:10.4f} Pa  (Analítico: {sig_zz_exact:10.4f} Pa, Erro: {err_szz_c:.4f}%)")
+        print(f"  sigma_xx         = {sxx_int[idx_c]:10.4f} Pa  (Analítico: {sig_xx_exact:10.4f} Pa, Erro: {err_sxx_c:.4f}%)")
+        print(f"  sigma_yy         = {syy_int[idx_c]:10.4f} Pa  (Analítico: {sig_yy_exact:10.4f} Pa, Erro: {err_syy_c:.4f}%)")
+        print(f"  sigma_xy         = {sxy_int[idx_c]:10.4e} Pa, sigma_yz = {syz_int[idx_c]:10.4e} Pa, sigma_zx = {szx_int[idx_c]:10.4e} Pa")
+        print(f"  Von Mises        = {svm_int[idx_c]:10.4f} Pa  (Analítico: {sig_vm_exact:10.4f} Pa, Erro: {err_svm_c:.4f}%)")
         print("-" * 70)
 
-    # 3. Carrega e valida tensões de contorno (stresses.dat)
+        # Distância ao contorno e filtragem de interior profundo (> 0.5m)
+        dist_to_bnd = np.minimum.reduce([x_int, L - x_int, y_int, L - y_int, z_int, L - z_int])
+        interior_mask = dist_to_bnd > 0.5
+        n_deep = np.sum(interior_mask)
+
+        # Erros relativos de deslocamento para z > 0.05m
+        mask_z = z_int > 0.05
+        uz_exact_all = (p / M) * z_int
+        err_uz_all = np.abs(uz_int[mask_z] - uz_exact_all[mask_z]) / uz_exact_all[mask_z] * 100.0
+
+        print(f"Estatísticas dos Pontos Internos ({len(z_int)} pontos no total):")
+        print(f"  u_z:  Erro Médio = {np.mean(err_uz_all):.4f}%, Erro Mediano = {np.median(err_uz_all):.4f}%")
+        print(f"  sigma_zz: Mediana = {np.median(szz_int):.4f} Pa (Analítico: {sig_zz_exact:.2f} Pa)")
+        print(f"  sigma_xx: Mediana = {np.median(sxx_int):.4f} Pa (Analítico: {sig_xx_exact:.2f} Pa)")
+        print(f"  sigma_yy: Mediana = {np.median(syy_int):.4f} Pa (Analítico: {sig_yy_exact:.2f} Pa)")
+        print(f"  Von Mises: Mediana = {np.median(svm_int):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
+        print(f"Estatísticas no Interior Profundo (distância ao contorno > 0.5m, {n_deep} pontos):")
+        err_uz_deep = np.abs(uz_int[interior_mask] - uz_exact_all[interior_mask]) / uz_exact_all[interior_mask] * 100.0
+        print(f"  u_z:       Erro Médio = {np.mean(err_uz_deep):.4f}%")
+        print(f"  sigma_zz:  Média = {np.mean(szz_int[interior_mask]):.4f} +/- {np.std(szz_int[interior_mask]):.4f} Pa (Analítico: {sig_zz_exact:.2f} Pa)")
+        print(f"  sigma_xx:  Média = {np.mean(sxx_int[interior_mask]):.4f} +/- {np.std(sxx_int[interior_mask]):.4f} Pa (Analítico: {sig_xx_exact:.2f} Pa)")
+        print(f"  sigma_yy:  Média = {np.mean(syy_int[interior_mask]):.4f} +/- {np.std(syy_int[interior_mask]):.4f} Pa (Analítico: {sig_yy_exact:.2f} Pa)")
+        print(f"  Von Mises: Média = {np.mean(svm_int[interior_mask]):.4f} +/- {np.std(svm_int[interior_mask]):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
+        print("-" * 70)
+
+    # 4. Carrega e valida tensões de contorno (stresses.dat)
     stresses = parse_stresses('stresses.dat')
     if stresses is not None:
         row770 = stresses[stresses[:, 0] == 770]
@@ -178,7 +250,7 @@ def main():
         print(f"  Von Mises: Média = {np.mean(svm_all):.4f} Pa, DesvPad = {np.std(svm_all):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
         print("-" * 70)
 
-    # 4. Gráficos de Validação (2x2)
+    # 5. Gráficos de Validação (2x2)
     fig, axes = plt.subplots(2, 2, figsize=(14, 11))
     ((ax1, ax2), (ax3, ax4)) = axes
 
@@ -191,11 +263,13 @@ def main():
     if nodes_coords and nodes_disp:
         z_vals = [nodes_coords[nid][2] for nid in nodes_coords if nid in nodes_disp]
         uz_vals = [nodes_disp[nid][2] for nid in nodes_coords if nid in nodes_disp]
-        ax1.scatter(np.array(uz_vals) * 1e4, z_vals, color='royalblue', s=18, alpha=0.5, label='Nós BEM 3D (QUADESTH)')
+        ax1.scatter(np.array(uz_vals) * 1e4, z_vals, color='royalblue', s=16, alpha=0.45, label='Nós de Contorno (QUADESTH)')
+
+    if has_int_pts:
+        ax1.scatter(uz_int * 1e4, z_int, color='mediumseagreen', s=12, alpha=0.35, label=f'Pontos Internos ({len(z_int)} pts)')
+        ax1.plot(uz_int[idx_c] * 1e4, zc, '^', color='forestgreen', markersize=9, label=f'Centro Interno ({zc:.2f}m, erro={err_uz_c:.3f}%)')
 
     ax1.plot(uz_num * 1e4, L, 's', color='darkblue', markersize=9, label=f'Nó Topo 770 ($z=6$m, erro={err_uz_top:.3f}%)')
-    if int_pts:
-        ax1.plot(uz_mid_num * 1e4, 3.0, '^', color='darkgreen', markersize=9, label=f'Pto. Interno ($z=3$m, erro={err_uz_mid:.3f}%)')
 
     ax1.set_xlabel('Deslocamento Vertical $u_z \\times 10^4$ (m)', fontsize=11)
     ax1.set_ylabel('Cota $Z$ (m)', fontsize=11)
@@ -204,48 +278,67 @@ def main():
     ax1.legend(fontsize=9, loc='upper left')
 
     # Painel 2: Tensão Vertical sigma_zz
+    ax2.axhline(sig_zz_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{zz}} = {sig_zz_exact:.1f}$ Pa')
     if stresses is not None:
         z_nodes = stresses[:, 3]
         szz_nodes = stresses[:, 6]
-        ax2.scatter(z_nodes, szz_nodes, color='crimson', s=16, alpha=0.4, label=r'Nós BEM ($\sigma_{zz}$)')
-        ax2.axhline(sig_zz_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{zz}} = {sig_zz_exact:.1f}$ Pa')
+        ax2.scatter(z_nodes, szz_nodes, color='crimson', s=16, alpha=0.4, label=r'Nós de Contorno ($\sigma_{zz}$)')
         if len(row770) > 0:
             ax2.plot(6.0, szz_770, 's', color='darkred', markersize=9, label=rf'Nó 770 ({szz_770:.2f} Pa, erro={err_szz:.3f}%)')
+
+    if has_int_pts:
+        ax2.scatter(z_int[interior_mask], szz_int[interior_mask], color='mediumpurple', s=12, alpha=0.45, label=rf'Pontos Internos ($d>0.5$m, $\mu$={np.mean(szz_int[interior_mask]):.2f} Pa)')
+        ax2.plot(zc, szz_int[idx_c], '^', color='darkmagenta', markersize=9, label=rf'Centro ({szz_int[idx_c]:.2f} Pa, erro={err_szz_c:.3f}%)')
+
     ax2.set_xlabel('Cota $Z$ (m)', fontsize=11)
     ax2.set_ylabel(r'Tensão $\sigma_{zz}$ (Pa)', fontsize=11)
     ax2.set_title(r'(b) Tensão Normal Vertical $\sigma_{zz}$', fontsize=12, pad=10)
+    ax2.set_ylim(85.0, 115.0)
     ax2.grid(True, linestyle='--', alpha=0.6)
     ax2.legend(fontsize=9, loc='lower right')
 
     # Painel 3: Tensões Laterais sigma_xx e sigma_yy
+    ax3.axhline(sig_xx_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{xx}}=\sigma_{{yy}} = {sig_xx_exact:.2f}$ Pa')
     if stresses is not None:
         sxx_nodes = stresses[:, 4]
         syy_nodes = stresses[:, 5]
-        ax3.scatter(z_nodes, sxx_nodes, color='dodgerblue', s=14, alpha=0.35, label=r'$\sigma_{xx}$ (BEM)')
-        ax3.scatter(z_nodes, syy_nodes, color='mediumseagreen', s=14, alpha=0.35, label=r'$\sigma_{yy}$ (BEM)')
-        ax3.axhline(sig_xx_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{xx}}=\sigma_{{yy}} = {sig_xx_exact:.2f}$ Pa')
+        ax3.scatter(z_nodes, sxx_nodes, color='dodgerblue', s=14, alpha=0.35, label=r'$\sigma_{xx}$ (Contorno)')
+        ax3.scatter(z_nodes, syy_nodes, color='mediumseagreen', s=14, alpha=0.35, label=r'$\sigma_{yy}$ (Contorno)')
         if len(row770) > 0:
             ax3.plot(6.0, sxx_770, 'D', color='blue', markersize=8, label=rf'Nó 770 $\sigma_{{xx}}$ ({sxx_770:.2f} Pa)')
+
+    if has_int_pts:
+        ax3.scatter(z_int[interior_mask], sxx_int[interior_mask], color='steelblue', s=10, alpha=0.3, label=rf'$\sigma_{{xx}}$ Internos ($d>0.5$m)')
+        ax3.scatter(z_int[interior_mask], syy_int[interior_mask], color='seagreen', s=10, alpha=0.3, label=rf'$\sigma_{{yy}}$ Internos ($d>0.5$m)')
+        ax3.plot(zc, sxx_int[idx_c], '^', color='navy', markersize=8, label=rf'Centro $\sigma_{{xx}}$ ({sxx_int[idx_c]:.2f} Pa)')
+
     ax3.set_xlabel('Cota $Z$ (m)', fontsize=11)
     ax3.set_ylabel(r'Tensões Laterais $\sigma_{xx}, \sigma_{yy}$ (Pa)', fontsize=11)
     ax3.set_title(r'(c) Tensões de Confinamento Lateral $\sigma_{xx}$ e $\sigma_{yy}$', fontsize=12, pad=10)
+    ax3.set_ylim(20.0, 45.0)
     ax3.grid(True, linestyle='--', alpha=0.6)
     ax3.legend(fontsize=9, loc='lower right')
 
     # Painel 4: Tensão Equivalente de Von Mises
+    ax4.axhline(sig_vm_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{vm}} = {sig_vm_exact:.2f}$ Pa')
     if stresses is not None:
         svm_nodes = stresses[:, 10]
-        ax4.scatter(z_nodes, svm_nodes, color='purple', s=16, alpha=0.4, label=r'$\sigma_{vm}$ (BEM)')
-        ax4.axhline(sig_vm_exact, color='black', linestyle='--', linewidth=2.0, label=rf'Analítico $\sigma_{{vm}} = {sig_vm_exact:.2f}$ Pa')
+        ax4.scatter(z_nodes, svm_nodes, color='purple', s=16, alpha=0.4, label=r'$\sigma_{vm}$ (Contorno)')
         if len(row770) > 0:
             ax4.plot(6.0, svm_770, '*', color='indigo', markersize=11, label=rf'Nó 770 $\sigma_{{vm}}$ ({svm_770:.2f} Pa, erro={err_svm:.3f}%)')
+
+    if has_int_pts:
+        ax4.scatter(z_int[interior_mask], svm_int[interior_mask], color='darkorange', s=12, alpha=0.4, label=rf'$\sigma_{{vm}}$ Internos ($d>0.5$m, $\mu$={np.mean(svm_int[interior_mask]):.2f} Pa)')
+        ax4.plot(zc, svm_int[idx_c], '^', color='chocolate', markersize=9, label=rf'Centro ({svm_int[idx_c]:.2f} Pa, erro={err_svm_c:.3f}%)')
+
     ax4.set_xlabel('Cota $Z$ (m)', fontsize=11)
     ax4.set_ylabel(r'Tensão de Von Mises $\sigma_{vm}$ (Pa)', fontsize=11)
     ax4.set_title(r'(d) Tensão Equivalente de Von Mises $\sigma_{vm}$', fontsize=12, pad=10)
+    ax4.set_ylim(50.0, 85.0)
     ax4.grid(True, linestyle='--', alpha=0.6)
     ax4.legend(fontsize=9, loc='lower right')
 
-    plt.suptitle('Validação da Formulação Elastoestática 3D (QUADESTH - Solução de Kelvin)\nDeslocamentos e Recuperação de Tensões no Contorno', fontsize=14, y=0.99)
+    plt.suptitle('Validação da Formulação Elastoestática 3D (QUADESTH - Solução de Kelvin)\nDeslocamentos e Tensões no Contorno e nos Pontos Internos (Somigliana)', fontsize=14, y=0.99)
     plt.tight_layout()
 
     output_plot = 'result_plot.png'

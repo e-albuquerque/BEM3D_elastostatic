@@ -1,5 +1,8 @@
 module stress_mod
   use data_mod
+  use assembly_mod, only: all_eta1, all_eta2, all_eta3, all_xja, &
+                          all_xg1, all_xg2, all_xg3, all_ff, &
+                          ome_quad, omei_tri, omej_tri
   implicit none
 
   ! Dynamic Arrays for boundary stresses
@@ -9,7 +12,14 @@ module stress_mod
   real(dp), allocatable, public :: sigma_principal(:, :) ! (3, n): principal stresses (s1 >= s2 >= s3)
   real(dp), allocatable, public :: sigma_vm(:)           ! (n): Von Mises equivalent stress
 
+  ! Dynamic Arrays for internal points
+  real(dp), allocatable, public :: u_int(:, :)          ! (3, l): internal displacements
+  real(dp), allocatable, public :: sigma_int(:, :)      ! (6, l): internal Cauchy stresses
+  real(dp), allocatable, public :: sigma_int_prin(:, :) ! (3, l): internal principal stresses
+  real(dp), allocatable, public :: sigma_int_vm(:)      ! (l): internal Von Mises stress
+
   character(len=64), public :: filestress = 'stresses.dat'
+  character(len=64), public :: fileintpts = 'internal_points.dat'
 
 contains
 
@@ -458,6 +468,284 @@ contains
   end subroutine output_boundary_stresses
 
   !=============================================================================
+  ! compute_internal_points
+  ! Evaluates displacements and Cauchy stresses at all internal points
+  ! using Somigliana displacement and stress identities with OpenMP parallelization
+  !=============================================================================
+  subroutine compute_internal_points()
+    implicit none
+    integer :: ip, ie, k, m, ik, ncone, npg, i, j, igp, tot_gp
+    real(dp) :: wg, ff_val
+    real(dp) :: ug(3), tg(3)
+
+    ! Flattened Gauss point arrays
+    real(dp), allocatable :: gp_x(:), gp_y(:), gp_z(:)
+    real(dp), allocatable :: gp_nx(:), gp_ny(:), gp_nz(:)
+    real(dp), allocatable :: gp_u(:,:), gp_t(:,:)
+
+    ! Loop variables for internal points
+    real(dp) :: xi_x, xi_y, xi_z
+    real(dp) :: rx, ry, rz, r2, r, inv_r, inv_r2, inv_r3
+    real(dp) :: rd1, rd2, rd3, n1, n2, n3, rdn
+    real(dp) :: tu1, tu2, tu3, tt1, tt2, tt3
+    real(dp) :: rdt, rdu, nu_val
+    real(dp) :: fac_U, fac_T, fac_D, fac_S
+    real(dp) :: u_tmp(3), sig_tmp(6)
+    real(dp) :: D_xx, D_yy, D_zz, D_xy, D_yz, D_zx
+    real(dp) :: S_xx, S_yy, S_zz, S_xy, S_yz, S_zx
+    real(dp) :: c4, c6, pr4, nu, const_U, const_T, const_D, const_S
+
+    if (l <= 0) return
+
+    ! Allocate internal point result arrays
+    if (allocated(u_int)) deallocate(u_int)
+    if (allocated(sigma_int)) deallocate(sigma_int)
+    if (allocated(sigma_int_prin)) deallocate(sigma_int_prin)
+    if (allocated(sigma_int_vm)) deallocate(sigma_int_vm)
+
+    allocate(u_int(3, l), sigma_int(6, l), sigma_int_prin(3, l), sigma_int_vm(l))
+    u_int = 0.0_dp
+    sigma_int = 0.0_dp
+    sigma_int_prin = 0.0_dp
+    sigma_int_vm = 0.0_dp
+
+    ! 1. Count total Gauss points across all boundary elements
+    tot_gp = 0
+    do ie = 1, ne
+      if (nconec(ie) == 9) then
+        tot_gp = tot_gp + 36
+      else
+        tot_gp = tot_gp + 16
+      end if
+    end do
+
+    allocate(gp_x(tot_gp), gp_y(tot_gp), gp_z(tot_gp))
+    allocate(gp_nx(tot_gp), gp_ny(tot_gp), gp_nz(tot_gp))
+    allocate(gp_u(3, tot_gp), gp_t(3, tot_gp))
+
+    ! 2. Precompute Gauss point positions, normals, and weighted field values (u * dGamma, t * dGamma)
+    igp = 0
+    do ie = 1, ne
+      ncone = nconec(ie)
+      if (ncone == 9) then
+        npg = 6
+      else
+        npg = 4
+      end if
+
+      do i = 1, npg
+        do j = 1, npg
+          k = npg * (i - 1) + j
+          igp = igp + 1
+
+          if (ncone == 9) then
+            wg = ome_quad(i) * ome_quad(j) * all_xja(k, ie)
+          else
+            wg = omei_tri(i) * omej_tri(j) * all_xja(k, ie)
+          end if
+
+          gp_x(igp) = all_xg1(k, ie)
+          gp_y(igp) = all_xg2(k, ie)
+          gp_z(igp) = all_xg3(k, ie)
+
+          gp_nx(igp) = all_eta1(k, ie)
+          gp_ny(igp) = all_eta2(k, ie)
+          gp_nz(igp) = all_eta3(k, ie)
+
+          ug = 0.0_dp
+          tg = 0.0_dp
+          do m = 1, ncone
+            ik = kconec(m, ie)
+            ff_val = all_ff(m, k, ie)
+            ug(1) = ug(1) + ff_val * FI(3*ik - 2)
+            ug(2) = ug(2) + ff_val * FI(3*ik - 1)
+            ug(3) = ug(3) + ff_val * FI(3*ik)
+
+            tg(1) = tg(1) + ff_val * DFI(3*m - 2, ie)
+            tg(2) = tg(2) + ff_val * DFI(3*m - 1, ie)
+            tg(3) = tg(3) + ff_val * DFI(3*m,     ie)
+          end do
+
+          gp_u(:, igp) = ug(:) * wg
+          gp_t(:, igp) = tg(:) * wg
+        end do
+      end do
+    end do
+
+    ! Fundamental constants for Kelvin kernels
+    nu = xnu
+    c4 = 3.0_dp - 4.0_dp * nu
+    c6 = 1.0_dp - 2.0_dp * nu
+    pr4 = 1.0_dp - 4.0_dp * nu
+
+    const_U = 1.0_dp / (16.0_dp * pi * (1.0_dp - nu) * rge)
+    const_T = -1.0_dp / (8.0_dp * pi * (1.0_dp - nu))
+    const_D = 1.0_dp / (8.0_dp * pi * (1.0_dp - nu))
+    const_S = rge / (4.0_dp * pi * (1.0_dp - nu))
+
+    ! 3. Compute internal points displacements and stresses in parallel
+    !$omp parallel do private(ip, xi_x, xi_y, xi_z, igp, rx, ry, rz, r2, r, inv_r, inv_r2, inv_r3, &
+    !$omp& rd1, rd2, rd3, n1, n2, n3, rdn, tu1, tu2, tu3, tt1, tt2, tt3, rdt, rdu, nu_val, &
+    !$omp& fac_U, fac_T, fac_D, fac_S, u_tmp, sig_tmp, D_xx, D_yy, D_zz, D_xy, D_yz, D_zx, &
+    !$omp& S_xx, S_yy, S_zz, S_xy, S_yz, S_zx) schedule(guided)
+    do ip = 1, l
+      xi_x = cx(ip)
+      xi_y = cy(ip)
+      xi_z = cz(ip)
+
+      u_tmp = 0.0_dp
+      sig_tmp = 0.0_dp
+
+      do igp = 1, tot_gp
+        rx = gp_x(igp) - xi_x
+        ry = gp_y(igp) - xi_y
+        rz = gp_z(igp) - xi_z
+
+        r2 = rx*rx + ry*ry + rz*rz
+        r = sqrt(r2)
+        inv_r = 1.0_dp / r
+        inv_r2 = inv_r * inv_r
+        inv_r3 = inv_r2 * inv_r
+
+        rd1 = rx * inv_r
+        rd2 = ry * inv_r
+        rd3 = rz * inv_r
+
+        n1 = gp_nx(igp)
+        n2 = gp_ny(igp)
+        n3 = gp_nz(igp)
+
+        rdn = rd1*n1 + rd2*n2 + rd3*n3
+
+        tu1 = gp_u(1, igp); tu2 = gp_u(2, igp); tu3 = gp_u(3, igp)
+        tt1 = gp_t(1, igp); tt2 = gp_t(2, igp); tt3 = gp_t(3, igp)
+
+        rdt = rd1*tt1 + rd2*tt2 + rd3*tt3
+        rdu = rd1*tu1 + rd2*tu2 + rd3*tu3
+        nu_val = n1*tu1 + n2*tu2 + n3*tu3
+
+        ! Displacement kernels: U* and T*
+        fac_U = const_U * inv_r
+        fac_T = const_T * inv_r2
+
+        ! u_i += U_ik * t_k - T_ik * u_k
+        u_tmp(1) = u_tmp(1) + fac_U * (c4 * tt1 + rd1 * rdt) - &
+                              fac_T * (rdn * (c6 * tu1 + 3.0_dp * rd1 * rdu) + c6 * (nu_val * rd1 - n1 * rdu))
+        u_tmp(2) = u_tmp(2) + fac_U * (c4 * tt2 + rd2 * rdt) - &
+                              fac_T * (rdn * (c6 * tu2 + 3.0_dp * rd2 * rdu) + c6 * (nu_val * rd2 - n2 * rdu))
+        u_tmp(3) = u_tmp(3) + fac_U * (c4 * tt3 + rd3 * rdt) - &
+                              fac_T * (rdn * (c6 * tu3 + 3.0_dp * rd3 * rdu) + c6 * (nu_val * rd3 - n3 * rdu))
+
+        ! Stress kernels: D* and S*
+        fac_D = const_D * inv_r2
+        fac_S = const_S * inv_r3
+
+        D_xx = fac_D * (c6 * (2.0_dp * tt1 * rd1 - rdt) + 3.0_dp * rd1 * rd1 * rdt)
+        D_yy = fac_D * (c6 * (2.0_dp * tt2 * rd2 - rdt) + 3.0_dp * rd2 * rd2 * rdt)
+        D_zz = fac_D * (c6 * (2.0_dp * tt3 * rd3 - rdt) + 3.0_dp * rd3 * rd3 * rdt)
+        D_xy = fac_D * (c6 * (tt1 * rd2 + tt2 * rd1)    + 3.0_dp * rd1 * rd2 * rdt)
+        D_yz = fac_D * (c6 * (tt2 * rd3 + tt3 * rd2)    + 3.0_dp * rd2 * rd3 * rdt)
+        D_zx = fac_D * (c6 * (tt3 * rd1 + tt1 * rd3)    + 3.0_dp * rd3 * rd1 * rdt)
+
+        S_xx = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu1 * rd1 - 5.0_dp * rd1 * rd1 * rdu) + &
+                        6.0_dp * nu * rdu * n1 * rd1 + c6 * (3.0_dp * nu_val * rd1 * rd1 + 2.0_dp * n1 * tu1) - &
+                        pr4 * nu_val)
+
+        S_yy = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu2 * rd2 - 5.0_dp * rd2 * rd2 * rdu) + &
+                        6.0_dp * nu * rdu * n2 * rd2 + c6 * (3.0_dp * nu_val * rd2 * rd2 + 2.0_dp * n2 * tu2) - &
+                        pr4 * nu_val)
+
+        S_zz = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu3 * rd3 - 5.0_dp * rd3 * rd3 * rdu) + &
+                        6.0_dp * nu * rdu * n3 * rd3 + c6 * (3.0_dp * nu_val * rd3 * rd3 + 2.0_dp * n3 * tu3) - &
+                        pr4 * nu_val)
+
+        S_xy = fac_S * (3.0_dp * rdn * (nu * (tu1 * rd2 + tu2 * rd1) - 5.0_dp * rd1 * rd2 * rdu) + &
+                        3.0_dp * nu * rdu * (n1 * rd2 + n2 * rd1) + &
+                        c6 * (3.0_dp * nu_val * rd1 * rd2 + n1 * tu2 + n2 * tu1))
+
+        S_yz = fac_S * (3.0_dp * rdn * (nu * (tu2 * rd3 + tu3 * rd2) - 5.0_dp * rd2 * rd3 * rdu) + &
+                        3.0_dp * nu * rdu * (n2 * rd3 + n3 * rd2) + &
+                        c6 * (3.0_dp * nu_val * rd2 * rd3 + n2 * tu3 + n3 * tu2))
+
+        S_zx = fac_S * (3.0_dp * rdn * (nu * (tu3 * rd1 + tu1 * rd3) - 5.0_dp * rd3 * rd1 * rdu) + &
+                        3.0_dp * nu * rdu * (n3 * rd1 + n1 * rd3) + &
+                        c6 * (3.0_dp * nu_val * rd3 * rd1 + n3 * tu1 + n1 * tu3))
+
+        ! sigma_ij += D_kij * t_k - S_kij * u_k
+        sig_tmp(1) = sig_tmp(1) + (D_xx - S_xx)
+        sig_tmp(2) = sig_tmp(2) + (D_yy - S_yy)
+        sig_tmp(3) = sig_tmp(3) + (D_zz - S_zz)
+        sig_tmp(4) = sig_tmp(4) + (D_xy - S_xy)
+        sig_tmp(5) = sig_tmp(5) + (D_yz - S_yz)
+        sig_tmp(6) = sig_tmp(6) + (D_zx - S_zx)
+      end do
+
+      u_int(1:3, ip) = u_tmp(1:3)
+      sigma_int(1:6, ip) = sig_tmp(1:6)
+
+      ! Synchronize with legacy dsol array
+      dsol(3*ip - 2) = u_tmp(1)
+      dsol(3*ip - 1) = u_tmp(2)
+      dsol(3*ip    ) = u_tmp(3)
+
+      call calc_principal_and_vm(sigma_int(:, ip), sigma_int_prin(:, ip), sigma_int_vm(ip))
+    end do
+    !$omp end parallel do
+
+    deallocate(gp_x, gp_y, gp_z, gp_nx, gp_ny, gp_nz, gp_u, gp_t)
+  end subroutine compute_internal_points
+
+  !=============================================================================
+  ! output_internal_points
+  ! Outputs internal points displacements and stresses to ipr and internal_points.dat
+  !=============================================================================
+  subroutine output_internal_points()
+    implicit none
+    integer :: ip, k
+    integer, parameter :: iunit_int = 27
+
+    if (l <= 0) return
+
+    ! Write Internal Points Stresses to main output file (ipr)
+    write(ipr, '(//A)') ' ' // repeat('*', 79)
+    write(ipr, '(A)') ' INTERNAL POINTS STRESSES'
+    write(ipr, '(A)') ' ' // repeat('*', 79)
+    write(ipr, 100)
+100 format(1X, 'POINT', 5X, 'SIGMA_XX', 8X, 'SIGMA_YY', 8X, 'SIGMA_ZZ', 8X, &
+           'SIGMA_XY', 8X, 'SIGMA_YZ', 8X, 'SIGMA_ZX', 7X, 'VON_MISES', 9X, &
+           'SIGMA_1', 9X, 'SIGMA_2', 9X, 'SIGMA_3'/)
+
+    do ip = 1, l
+      write(ipr, 110) ip, (sigma_int(k, ip), k = 1, 6), sigma_int_vm(ip), &
+                          (sigma_int_prin(k, ip), k = 1, 3)
+    end do
+110 format(1X, I5, 10(1X, E15.7))
+
+    ! Write dedicated internal_points.dat file for post-processing and plotting
+    open(unit=iunit_int, file=trim(fileintpts), status='replace', action='write')
+    write(iunit_int, '(A)') '# INTERNAL POINTS DISPLACEMENTS AND STRESSES (QUADESTH 3D ELASTOSTATICS)'
+    write(iunit_int, '(A, I6)') '# Total Internal Points: ', l
+    write(iunit_int, '(A)') '# Col 1: Point ID'
+    write(iunit_int, '(A)') '# Col 2-4: X, Y, Z coordinates'
+    write(iunit_int, '(A)') '# Col 5-7: u_x, u_y, u_z displacements'
+    write(iunit_int, '(A)') '# Col 8-13: Sigma_xx, Sigma_yy, Sigma_zz, Sigma_xy, Sigma_yz, Sigma_zx'
+    write(iunit_int, '(A)') '# Col 14: Von Mises Equivalent Stress'
+    write(iunit_int, '(A)') '# Col 15-17: Principal Stresses (Sigma_1 >= Sigma_2 >= Sigma_3)'
+    write(iunit_int, '(A)') '# ' // repeat('-', 140)
+
+    do ip = 1, l
+      write(iunit_int, 300) ip, cx(ip), cy(ip), cz(ip), &
+                           (u_int(k, ip), k = 1, 3), &
+                           (sigma_int(k, ip), k = 1, 6), sigma_int_vm(ip), &
+                           (sigma_int_prin(k, ip), k = 1, 3)
+    end do
+300 format(I6, 3(1X, E15.7), 3(1X, E15.7), 6(1X, E15.7), 4(1X, E15.7))
+
+    close(iunit_int)
+    write(*, '(A)') ' Internal points exported to: ' // trim(fileintpts)
+  end subroutine output_internal_points
+
+  !=============================================================================
   ! deallocate_stress_data
   ! Frees all allocated memory in stress_mod
   !=============================================================================
@@ -467,6 +755,10 @@ contains
     if (allocated(sigma_node)) deallocate(sigma_node)
     if (allocated(sigma_principal)) deallocate(sigma_principal)
     if (allocated(sigma_vm)) deallocate(sigma_vm)
+    if (allocated(u_int)) deallocate(u_int)
+    if (allocated(sigma_int)) deallocate(sigma_int)
+    if (allocated(sigma_int_prin)) deallocate(sigma_int_prin)
+    if (allocated(sigma_int_vm)) deallocate(sigma_int_vm)
   end subroutine deallocate_stress_data
 
 end module stress_mod

@@ -66,36 +66,67 @@ def input_data():
 
 def compute_inodes(file_name, bound_cond):
     """
-    Reads mesh file and extracts nodes, elements, and 3D boundary conditions.
+    Reads mesh file and extracts nodes, elements, boundary conditions,
+    and identifies internal nodes (points that do not belong to the boundary).
     """
     mesh = meshio.read(file_name + '.msh')
     coordinates = mesh.points
-    elem = mesh.cells_dict['quad9']
-    segments = mesh.cell_data_dict['gmsh:physical']['quad9']
+
+    # Identify all 2D boundary elements
+    boundary_cells = []
+    segments_list = []
+    cell_types_2d = ['quad9', 'quad8', 'quad', 'triangle6', 'triangle']
+
+    for cell_block in mesh.cells:
+        if cell_block.type in cell_types_2d:
+            boundary_cells.append(cell_block.data)
+            if cell_block.type in mesh.cell_data_dict.get('gmsh:physical', {}):
+                segments_list.append(mesh.cell_data_dict['gmsh:physical'][cell_block.type])
+
+    if 'quad9' in mesh.cells_dict:
+        elem = mesh.cells_dict['quad9']
+        segments = mesh.cell_data_dict['gmsh:physical']['quad9']
+    else:
+        elem = np.vstack(boundary_cells)
+        segments = np.concatenate(segments_list)
+
     edges = mesh.field_data
 
     bc_info = {}
     for key, value in bound_cond.items():
-        segment = mesh.field_data[key][0]
-        bc_info[key] = {
-            'segment': segment,
-            'type_x': value['type_x'],
-            'value_x': value['value_x'],
-            'type_y': value['type_y'],
-            'value_y': value['value_y'],
-            'type_z': value['type_z'],
-            'value_z': value['value_z'],
-            'edge': edges[key]
-        }
+        if key in mesh.field_data:
+            segment = mesh.field_data[key][0]
+            bc_info[key] = {
+                'segment': segment,
+                'type_x': value['type_x'],
+                'value_x': value['value_x'],
+                'type_y': value['type_y'],
+                'value_y': value['value_y'],
+                'type_z': value['type_z'],
+                'value_z': value['value_z'],
+                'edge': edges[key]
+            }
 
-    boundary_nodes = np.unique(elem)
+    # Boundary nodes: all nodes belonging to any 2D surface element
+    boundary_nodes_set = set()
+    for cells in boundary_cells:
+        boundary_nodes_set.update(np.unique(cells))
+
+    boundary_nodes = np.array(sorted(list(boundary_nodes_set)))
+
+    # Internal nodes: all nodes in the mesh that DO NOT belong to the boundary
+    all_nodes_set = set(range(len(coordinates)))
+    internal_nodes_idx = np.array(sorted(list(all_nodes_set - boundary_nodes_set)))
+    internal_points = coordinates[internal_nodes_idx] if len(internal_nodes_idx) > 0 else np.empty((0, 3))
 
     return {
         'nodes': boundary_nodes,
         'coordinates': coordinates,
         'elements': elem,
         'segments': segments,
-        'bc_info': bc_info
+        'bc_info': bc_info,
+        'internal_nodes': internal_nodes_idx,
+        'internal_points': internal_points
     }
 
 def find_node_by_coord(computed_data, target_coord=(3.0, 3.0, 6.0)):
@@ -218,8 +249,13 @@ def generate_preprocessing(tracked_node=None, target_coord=(3.0, 3.0, 6.0), outp
         coords = computed_data['coordinates'][tracked_node - 1]
         print(f"Using specified tracked node: Node {tracked_node} at {coords}")
 
-    # Internal point at domain center (3m, 3m, 3m)
-    int_points = np.array([[3.0, 3.0, 3.0]])
+    # Use internal nodes from the volume mesh as internal points
+    int_points = computed_data.get('internal_points', None)
+    if int_points is None or len(int_points) == 0:
+        int_points = np.array([[3.0, 3.0, 3.0]])
+        print(f"Nenhum nó interno de volume detectado. Usando ponto central padrão: {int_points[0]}")
+    else:
+        print(f"Detectados {len(int_points)} nós internos na malha de volume para uso como pontos internos.")
 
     # Generate primary input file
     create_input_file(output_filename, computed_data, int_points,

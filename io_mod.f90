@@ -139,12 +139,9 @@ contains
     close(inp)
   end subroutine input_data
 
-  subroutine inter8()
+  subroutine reorganize_solution()
     implicit none
-    integer :: ie, ld, k, ik, in_idx, j, m, ii
-    real(dp) :: xj1(9), xj2(9), xj3(9), xi(3)
-    real(dp) :: eta1(36), eta2(36), eta3(36), xja(36), xg1(36), xg2(36), xg3(36), ff(9, 36)
-    real(dp) :: h_elem(3, 27), g_elem(3, 27)
+    integer :: ie, ld, k, ik, in_idx, j, m
 
     ! Reorganize FI and DFI arrays: FI holds displacements, DFI holds tractions
     do ie = 1, ne
@@ -177,38 +174,12 @@ contains
         end do
       end do
     end do
+  end subroutine reorganize_solution
 
-    if (l <= 0) return
-
-    ! Compute displacement at internal points using Somigliana identity
-    dsol = 0.0_dp
-    do ie = 1, ne
-      do ii = 1, nconec(ie)
-        ik = kconec(ii, ie)
-        xj1(ii) = x(ik)
-        xj2(ii) = y(ik)
-        xj3(ii) = z(ik)
-      end do
-
-      call etaxja(xj1, xj2, xj3, eta1, eta2, eta3, xja, xg1, xg2, xg3, ff, nconec(ie))
-
-      do k = 1, l
-        xi(1) = cx(k); xi(2) = cy(k); xi(3) = cz(k)
-        call extin8(eta1, eta2, eta3, xja, xg1, xg2, xg3, ff, xi, h_elem, g_elem, nconec(ie))
-
-        do ld = 1, 3
-          do m = 1, nconec(ie)
-            ik = kconec(m, ie)
-            dsol(3*k - 2) = dsol(3*k - 2) + g_elem(1, 3*m - 3 + ld) * DFI(3*m - 3 + ld, ie) - &
-                            h_elem(1, 3*m - 3 + ld) * FI(3*ik - 3 + ld)
-            dsol(3*k - 1) = dsol(3*k - 1) + g_elem(2, 3*m - 3 + ld) * DFI(3*m - 3 + ld, ie) - &
-                            h_elem(2, 3*m - 3 + ld) * FI(3*ik - 3 + ld)
-            dsol(3*k    ) = dsol(3*k    ) + g_elem(3, 3*m - 3 + ld) * DFI(3*m - 3 + ld, ie) - &
-                            h_elem(3, 3*m - 3 + ld) * FI(3*ik - 3 + ld)
-          end do
-        end do
-      end do
-    end do
+  subroutine inter8()
+    implicit none
+    ! Backward-compatible wrapper
+    call reorganize_solution()
   end subroutine inter8
 
   subroutine output_data()

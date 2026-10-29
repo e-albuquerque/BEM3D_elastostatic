@@ -8,7 +8,7 @@ program quadesth_modern
   implicit none
 
   real(dp) :: t_start, t_end, t_assembly_start, t_assembly_end, t_solve_start, t_solve_end
-  real(dp) :: t_stress_start, t_stress_end
+  real(dp) :: t_stress_start, t_stress_end, t_int_start, t_int_end
   integer :: num_threads
 
   !$ integer, external :: omp_get_max_threads
@@ -51,8 +51,8 @@ program quadesth_modern
   call cpu_time(t_solve_end)
   write(*, '(A, F6.2, A)') 'done in ', (t_solve_end - t_solve_start), ' s'
 
-  ! 6. Compute internal points & reorganize displacements/tractions
-  call inter8()
+  ! 6. Reorganize solution vector (displacements in FI, tractions in DFI)
+  call reorganize_solution()
 
   ! 7. Compute boundary stresses (traction-recovery method)
   write(*, '(A)', advance='no') ' Computing boundary stresses (Traction-Recovery)... '
@@ -61,11 +61,21 @@ program quadesth_modern
   call cpu_time(t_stress_end)
   write(*, '(A, F6.2, A)') 'done in ', (t_stress_end - t_stress_start), ' s'
 
-  ! 8. Write full results to output file
+  ! 8. Compute internal points displacements and stresses (Somigliana identities)
+  if (l > 0) then
+    write(*, '(A, I6, A)', advance='no') ' Computing internal displacements and stresses for ', l, ' points... '
+    call cpu_time(t_int_start)
+    call compute_internal_points()
+    call cpu_time(t_int_end)
+    write(*, '(A, F6.2, A)') 'done in ', (t_int_end - t_int_start), ' s'
+  end if
+
+  ! 9. Write full results to output files
   call output_data()
   call output_boundary_stresses()
+  if (l > 0) call output_internal_points()
 
-  ! 9. Write tracked node displacements and tractions
+  ! 10. Write tracked node displacements and tractions
   call save_disp_trac()
 
   ! Close files
@@ -79,7 +89,7 @@ program quadesth_modern
   call cpu_time(t_end)
   write(*, '(A)') '============================================================='
   write(*, '(A, F8.2, A)') ' Computation completed successfully in ', (t_end - t_start), ' s'
-  write(*, '(A)') ' Results exported to: ' // trim(fileout) // ', ' // trim(filestress) // ' and ' // trim(filetrack)
+  write(*, '(A)') ' Results exported to: ' // trim(fileout) // ', ' // trim(filestress) // ', ' // trim(fileintpts) // ' and ' // trim(filetrack)
   write(*, '(A)') '============================================================='
 
 end program quadesth_modern

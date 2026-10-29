@@ -12,6 +12,8 @@ Physical Surface("sup4", 16) = {2};
 Physical Surface("sup6", 17) = {4};
 //+
 Physical Surface("sup5", 18) = {3};
+//+
+Physical Volume("vol", 19) = {1};
 
 // --- CONFIGURAÇÕES DA MALHA ---
 Mesh.RecombineAll = 1;       // Transforma triângulos em quadriláteros

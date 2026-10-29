@@ -78,6 +78,30 @@ $$
 
 - Stresses are transformed back to global coordinates ($\boldsymbol{\sigma} = \mathbf{L}^T \hat{\boldsymbol{\sigma}} \mathbf{L}$) and averaged across adjacent elements at boundary nodes.
 
+### 9. Somigliana Internal Point Solver (Displacements & Stresses)
+Computes exact 3D displacement vectors and the full 3D Cauchy stress tensor at all internal volume points using the Somigliana identities:
+
+$$
+u_i(\boldsymbol{\xi}) = \int_{\Gamma} U_{ik}^\ast(\mathbf{x}, \boldsymbol{\xi}) t_k(\mathbf{x}) d\Gamma - \int_{\Gamma} T_{ik}^\ast(\mathbf{x}, \boldsymbol{\xi}) u_k(\mathbf{x}) d\Gamma
+$$
+
+$$
+\sigma_{ij}(\boldsymbol{\xi}) = \int_{\Gamma} D_{kij}^\ast(\mathbf{x}, \boldsymbol{\xi}) t_k(\mathbf{x}) d\Gamma - \int_{\Gamma} S_{kij}^\ast(\mathbf{x}, \boldsymbol{\xi}) u_k(\mathbf{x}) d\Gamma
+$$
+
+Where the third-order ($D_{kij}^\ast$) and fourth-order ($S_{kij}^\ast$) Kelvin stress kernels are:
+
+$$
+D_{kij}^\ast = \frac{1}{8\pi (1-\nu) r^2} \left[ (1 - 2\nu) (\delta_{ki} r_{,j} + \delta_{kj} r_{,i} - \delta_{ij} r_{,k}) + 3 r_{,i} r_{,j} r_{,k} \right]
+$$
+
+$$
+S_{kij}^\ast = \frac{\mu}{4\pi (1-\nu) r^3} \left\{ 3 \frac{\partial r}{\partial n} \left[ (1 - 2\nu) \delta_{ij} r_{,k} + \nu (\delta_{ki} r_{,j} + \delta_{kj} r_{,i}) - 5 r_{,i} r_{,j} r_{,k} \right] + 3\nu (n_i r_{,j} r_{,k} + n_j r_{,i} r_{,k}) + (1 - 2\nu) (3 n_k r_{,i} r_{,j} + n_j \delta_{ki} + n_i \delta_{kj}) - (1 - 4\nu) n_k \delta_{ij} \right\}
+$$
+
+- Boundary Gauss-point geometries and field variables ($u \cdot d\Gamma$ and $t \cdot d\Gamma$) are precomputed once, enabling OpenMP parallel evaluation over thousands of internal points in ~1 second.
+- Outputs full displacement and stress tensors, principal stresses ($\sigma_1 \ge \sigma_2 \ge \sigma_3$), and Von Mises equivalent stress to `internal_points.dat`.
+
 ---
 
 ## 📂 Repository Structure
@@ -101,6 +125,7 @@ $$
 │   ├── posproc.py            # Postprocessor: 1D analytical validation and error metrics
 │   ├── disp_trac.dat         # Tracked node displacement and traction output
 │   ├── stresses.dat          # Complete boundary nodal stresses, Von Mises, and principal stresses
+│   ├── internal_points.dat   # Complete internal points displacements, Cauchy stresses, and Von Mises
 │   ├── cube8.dat             # Simulation input file generated from mesh
 │   ├── cube8_out.dat         # Detailed node displacements, element tractions, and internal points
 │   ├── mesh_faces.png        # 3D boundary mesh faces visualization
@@ -245,6 +270,20 @@ $$
 | **Mean $\sigma_{xx}$ (Mesh Average)** | All 866 nodes | $33.3321\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0036 %** |
 | **Mean $\sigma_{yy}$ (Mesh Average)** | All 866 nodes | $33.3369\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0108 %** |
 | **Mean $\sigma_{vm}$ (Mesh Average)** | All 866 nodes | $66.7231\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0846 %** |
+
+#### 3. Internal Points Displacements & Stresses (Somigliana Identities):
+| Quantity / Component | Region / Point | Numerical (QUADESTH) | Analytical | Relative Error |
+| :--- | :---: | :---: | :---: | :---: |
+| **Displacement $u_z$** | Central Point #1880 ($z=3\text{m}$) | $1.00053 \times 10^{-4}\text{ m}$ | $1.00000 \times 10^{-4}\text{ m}$ | **0.0530 %** |
+| **Vertical Stress $\sigma_{zz}$** | Central Point #1880 ($z=3\text{m}$) | $99.9764\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0236 %** |
+| **Lateral Stress $\sigma_{xx}$** | Central Point #1880 ($z=3\text{m}$) | $33.3290\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0130 %** |
+| **Lateral Stress $\sigma_{yy}$** | Central Point #1880 ($z=3\text{m}$) | $33.3243\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0271 %** |
+| **Von Mises Stress $\sigma_{vm}$** | Central Point #1880 ($z=3\text{m}$) | $66.6498\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0253 %** |
+| **Mean $u_z$ Error** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | — | — | **0.0770 %** |
+| **Mean $\sigma_{zz}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $99.9834 \pm 0.1421\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0166 %** |
+| **Mean $\sigma_{xx}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $33.2788 \pm 0.4926\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.1636 %** |
+| **Mean $\sigma_{yy}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $33.3267 \pm 0.1306\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0199 %** |
+| **Mean $\sigma_{vm}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $66.6873 \pm 0.2527\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0309 %** |
 
 ![Numerical vs Analytical Validation Plot](result_plot.png)
 
