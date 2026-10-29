@@ -104,25 +104,35 @@ $$
 
 ---
 
+## 🔄 Program Architecture & Execution Flowchart
+
+The complete computational workflow — spanning Gmsh/Python preprocessing, the modular Fortran 90 / OpenMP / LAPACK solver (`quadesth_modern`), and Python analytical validation — is illustrated below (generated via `fluxogram.py`):
+
+![QUADESTH Architecture and Pipeline Flowchart](flowchart.png)
+
+---
+
 ## 📂 Repository Structure
 
 ```text
 ├── src / root
-│   ├── main.f90              # Main driver (single-pass static solution)
+│   ├── main.f90              # Main driver (single-pass elastostatic solution)
 │   ├── data_mod.f90          # Global data structures, dynamic arrays, and material constants
 │   ├── assembly_mod.f90      # Parallel assembly (G & H), Gauss quadrature, and Kelvin solutions
-│   ├── stress_mod.f90        # Boundary stress recovery (Traction-Recovery Method, 9-node Lagrange)
+│   ├── stress_mod.f90        # Boundary stress recovery & Somigliana internal points (OpenMP)
 │   ├── solver_mod.f90        # Interface to LAPACK DGESV real linear solver
-│   ├── io_mod.f90            # Flexible file readers, Somigliana internal point solver, and output
+│   ├── io_mod.f90            # Flexible file readers, solution reorganization, and output
 │   ├── quadtheh.for          # Original F77 reference code (frequency domain)
 │   ├── Makefile              # GCC / GFortran build file
 │   └── build.bat             # Windows compilation batch script
 ├── mesh / preproc
-│   ├── placa.geo             # Gmsh script defining geometry, physical entities, and mesh
-│   ├── placa.msh             # Quadratic 3D boundary element mesh (quad9)
-│   └── preproc.py            # Preprocessor: Gmsh reader, real BC formatting, and 3D visualizer
-├── postproc / validation
-│   ├── posproc.py            # Postprocessor: 1D analytical validation and error metrics
+│   ├── placa.geo             # Gmsh script defining 3D volume geometry, physical groups, and mesh
+│   ├── placa.msh             # Quadratic 3D volume & boundary element mesh (quad9)
+│   └── preproc.py            # Preprocessor: Gmsh reader, internal points, BCs, and 3D visualizer
+├── postproc / validation / docs
+│   ├── posproc.py            # Postprocessor: 3D analytical validation and error metrics
+│   ├── fluxogram.py          # Graphviz script generating the architecture flowchart
+│   ├── flowchart.png         # Program architecture & execution pipeline diagram
 │   ├── disp_trac.dat         # Tracked node displacement and traction output
 │   ├── stresses.dat          # Complete boundary nodal stresses, Von Mises, and principal stresses
 │   ├── internal_points.dat   # Complete internal points displacements, Cauchy stresses, and Von Mises
@@ -130,7 +140,7 @@ $$
 │   ├── cube8_out.dat         # Detailed node displacements, element tractions, and internal points
 │   ├── mesh_faces.png        # 3D boundary mesh faces visualization
 │   └── result_plot.png       # Numerical vs Analytical validation plot
-└── README.md
+└── readme.md
 ```
 
 ---
@@ -191,7 +201,7 @@ The implementation is verified against the 1D uniaxial strain benchmark (oedomet
 * **Discretization**:
   * 216 quadratic quadrilateral boundary elements (9-node Lagrangian quadrilaterals, 36 elements per face).
   * 866 boundary collocation nodes (2598 degrees of freedom).
-  * 1 internal evaluation point at the domain center $(3, 3, 3)$.
+  * 1965 internal evaluation points extracted from the 3D volume mesh (`placa.msh`).
 
 ---
 
@@ -202,7 +212,7 @@ Generate the clean elastostatic input file and visualize the mesh:
 ```bash
 python preproc.py
 ```
-This reads `placa.msh`, generates `cube8.dat` (and `quad8.dat`), detects the top-center monitor node at $(3, 3, 6)$ (Node 770), and exports `mesh_faces.png`:
+This reads `placa.msh`, extracts boundary elements and internal volume nodes, generates `cube8.dat` (and `quad8.dat`), detects the top-center monitor node at $(3, 3, 6)$ (Node 770), and exports `mesh_faces.png`:
 
 ![3D Boundary Mesh Faces](mesh_faces.png)
 
@@ -218,16 +228,21 @@ Console output:
  QUADESTH Modernized BEM 3D Elastostatics Solver
  Quadratic Elements - Kelvin Fundamental Solution
  OpenMP Parallelization & LAPACK Real Solver (DGESV)
+ Boundary Stresses (Traction-Recovery Method)
 =============================================================
  OpenMP threads available:    8
  Tracking Node =    770
- Mesh loaded:    866 nodes,    216 elements,    1 internal points.
+ Mesh loaded:    866 nodes,    216 elements, 1965 internal points.
  Precomputing element Gauss point geometries...
- Assembling influence matrices (G and H)... done in   1.02 s
- Solving linear system with LAPACK DGESV... done in   1.94 s
+ Assembling influence matrices (G and H)... done in   1.08 s
+ Solving linear system with LAPACK DGESV... done in   1.89 s
+ Computing boundary stresses (Traction-Recovery)... done in   0.00 s
+ Computing internal displacements and stresses for   1965 points... done in   1.22 s
+ Boundary stresses exported to: stresses.dat
+ Internal points exported to: internal_points.dat
 =============================================================
- Computation completed successfully in     2.98 s
- Results exported to: cube8_out.dat and disp_trac.dat
+ Computation completed successfully in     4.31 s
+ Results exported to: cube8_out.dat, stresses.dat, internal_points.dat and disp_trac.dat
 =============================================================
 ```
 
