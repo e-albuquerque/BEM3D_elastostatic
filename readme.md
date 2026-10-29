@@ -123,7 +123,6 @@ The complete computational workflow — spanning Gmsh/Python preprocessing, the 
 │   ├── stress_mod.f90        # Boundary stress recovery & Somigliana internal points (OpenMP)
 │   ├── solver_mod.f90        # Interface to LAPACK DGESV real linear solver
 │   ├── io_mod.f90            # Flexible file readers, solution reorganization, and output
-│   ├── quadtheh.for          # Original F77 reference code (frequency domain)
 │   ├── Makefile              # GCC / GFortran build file
 │   └── build.bat             # Windows compilation batch script
 ├── mesh / preproc
@@ -235,14 +234,14 @@ Console output:
  Tracking Node =    770
  Mesh loaded:    866 nodes,    216 elements, 1965 internal points.
  Precomputing element Gauss point geometries...
- Assembling influence matrices (G and H)... done in   1.08 s
- Solving linear system with LAPACK DGESV... done in   1.89 s
+ Assembling influence matrices (G and H)... done in   0.95 s
+ Solving linear system with LAPACK DGESV... done in   2.11 s
  Computing boundary stresses (Traction-Recovery)... done in   0.00 s
- Computing internal displacements and stresses for   1965 points... done in   1.22 s
+ Computing internal displacements and stresses for   1965 points... done in   5.56 s
  Boundary stresses exported to: stresses.dat
  Internal points exported to: internal_points.dat
 =============================================================
- Computation completed successfully in     4.31 s
+ Computation completed successfully in     8.77 s
  Results exported to: cube8_out.dat, stresses.dat, internal_points.dat and disp_trac.dat
 =============================================================
 ```
