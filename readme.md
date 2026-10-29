@@ -99,7 +99,8 @@ $$
 S_{kij}^\ast = \frac{\mu}{4\pi (1-\nu) r^3} \left\{ 3 \frac{\partial r}{\partial n} \left[ (1 - 2\nu) \delta_{ij} r_{,k} + \nu (\delta_{ki} r_{,j} + \delta_{kj} r_{,i}) - 5 r_{,i} r_{,j} r_{,k} \right] + 3\nu (n_i r_{,j} r_{,k} + n_j r_{,i} r_{,k}) + (1 - 2\nu) (3 n_k r_{,i} r_{,j} + n_j \delta_{ki} + n_i \delta_{kj}) - (1 - 4\nu) n_k \delta_{ij} \right\}
 $$
 
-- Boundary Gauss-point geometries and field variables ($u \cdot d\Gamma$ and $t \cdot d\Gamma$) are precomputed once, enabling OpenMP parallel evaluation over thousands of internal points in ~1 second.
+- **Adaptive High-Order Gauss-Legendre Quadrature for Quasi-Singularities**: Precomputes two-tier boundary Gauss-point tables — standard `6x6` (36 pts/elem) for far elements ($d > 3.5 R_e$) and `40x40` (1,600 pts/elem) for near-boundary elements ($d \le 3.5 R_e$) — completely eliminating $1/r^2$ and $1/r^3$ quasi-singular integration errors even for internal nodes very close to the boundary ($d / L_e \approx 0.07$).
+- Boundary Gauss-point geometries and field variables ($u \cdot d\Gamma$ and $t \cdot d\Gamma$) are precomputed once, enabling OpenMP parallel evaluation over all 1,965 internal points in ~1.5 seconds wall-clock time.
 - Outputs full displacement and stress tensors, principal stresses ($\sigma_1 \ge \sigma_2 \ge \sigma_3$), and Von Mises equivalent stress to `internal_points.dat`.
 
 ---
@@ -270,35 +271,35 @@ $$
 #### 1. Displacements and Applied Tractions:
 | Evaluation Point | Coordinate $z$ | Numerical (QUADESTH) | Analytical | Relative Error |
 | :--- | :---: | :---: | :---: | :---: |
-| **Top-center Node 770 ($u_z$)** | $6.0\text{ m}$ | $2.00044 \times 10^{-4}\text{ m}$ | $2.00000 \times 10^{-4}\text{ m}$ | **0.022 %** |
-| **Internal Point 1 ($u_z$)** | $3.0\text{ m}$ | $1.00057 \times 10^{-4}\text{ m}$ | $1.00000 \times 10^{-4}\text{ m}$ | **0.057 %** |
-| **Top Traction $t_z$** | $6.0\text{ m}$ | $100.00000\text{ N/m}^2$ | $100.00000\text{ N/m}^2$ | **0.000 %** |
+| **Top-center Node 770 ($u_z$)** | $6.0\text{ m}$ | $1.999998 \times 10^{-4}\text{ m}$ | $2.000000 \times 10^{-4}\text{ m}$ | **0.0001 %** |
+| **Central Internal Point #1880 ($u_z$)** | $3.0\text{ m}$ | $0.999998 \times 10^{-4}\text{ m}$ | $1.000000 \times 10^{-4}\text{ m}$ | **0.0002 %** |
+| **Top Traction $t_z$** | $6.0\text{ m}$ | $100.00000\text{ N/m}^2$ | $100.00000\text{ N/m}^2$ | **0.0000 %** |
 
 #### 2. Recovered Boundary Stresses (Traction-Recovery Method):
 | Stress Component | Node / Region | Numerical (QUADESTH) | Analytical | Relative Error |
 | :--- | :---: | :---: | :---: | :---: |
 | **Vertical Stress $\sigma_{zz}$** | Node 770 ($z=6\text{m}$) | $100.0000\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0000 %** |
-| **Lateral Stress $\sigma_{xx}$** | Node 770 ($z=6\text{m}$) | $33.3490\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0469 %** |
-| **Lateral Stress $\sigma_{yy}$** | Node 770 ($z=6\text{m}$) | $33.3382\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0147 %** |
-| **Von Mises Stress $\sigma_{vm}$** | Node 770 ($z=6\text{m}$) | $66.6564\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0154 %** |
-| **Mean $\sigma_{zz}$ (Mesh Average)** | All 866 nodes | $100.0363\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0363 %** |
-| **Mean $\sigma_{xx}$ (Mesh Average)** | All 866 nodes | $33.3321\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0036 %** |
-| **Mean $\sigma_{yy}$ (Mesh Average)** | All 866 nodes | $33.3369\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0108 %** |
-| **Mean $\sigma_{vm}$ (Mesh Average)** | All 866 nodes | $66.7231\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0846 %** |
+| **Lateral Stress $\sigma_{xx}$** | Node 770 ($z=6\text{m}$) | $33.3334\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0002 %** |
+| **Lateral Stress $\sigma_{yy}$** | Node 770 ($z=6\text{m}$) | $33.3334\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0002 %** |
+| **Von Mises Stress $\sigma_{vm}$** | Node 770 ($z=6\text{m}$) | $66.6666\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0001 %** |
+| **Mean $\sigma_{zz}$ (Mesh Average)** | All 866 nodes | $99.9998 \pm 0.0024\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0002 %** |
+| **Mean $\sigma_{xx}$ (Mesh Average)** | All 866 nodes | $33.3332 \pm 0.0015\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0003 %** |
+| **Mean $\sigma_{yy}$ (Mesh Average)** | All 866 nodes | $33.3332 \pm 0.0015\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0003 %** |
+| **Mean $\sigma_{vm}$ (Mesh Average)** | All 866 nodes | $66.6666 \pm 0.0022\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0001 %** |
 
-#### 3. Internal Points Displacements & Stresses (Somigliana Identities):
+#### 3. Internal Points Displacements & Stresses (Somigliana Identities — Adaptive `40x40` / `6x6` Quadrature):
 | Quantity / Component | Region / Point | Numerical (QUADESTH) | Analytical | Relative Error |
 | :--- | :---: | :---: | :---: | :---: |
-| **Displacement $u_z$** | Central Point #1880 ($z=3\text{m}$) | $1.00053 \times 10^{-4}\text{ m}$ | $1.00000 \times 10^{-4}\text{ m}$ | **0.0530 %** |
-| **Vertical Stress $\sigma_{zz}$** | Central Point #1880 ($z=3\text{m}$) | $99.9764\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0236 %** |
-| **Lateral Stress $\sigma_{xx}$** | Central Point #1880 ($z=3\text{m}$) | $33.3290\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0130 %** |
-| **Lateral Stress $\sigma_{yy}$** | Central Point #1880 ($z=3\text{m}$) | $33.3243\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0271 %** |
-| **Von Mises Stress $\sigma_{vm}$** | Central Point #1880 ($z=3\text{m}$) | $66.6498\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0253 %** |
-| **Mean $u_z$ Error** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | — | — | **0.0770 %** |
-| **Mean $\sigma_{zz}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $99.9834 \pm 0.1421\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0166 %** |
-| **Mean $\sigma_{xx}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $33.2788 \pm 0.4926\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.1636 %** |
-| **Mean $\sigma_{yy}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $33.3267 \pm 0.1306\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0199 %** |
-| **Mean $\sigma_{vm}$** | Deep Interior ($d > 0.5\text{m}$, 604 pts) | $66.6873 \pm 0.2527\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0309 %** |
+| **Displacement $u_z$** | Central Point #1880 ($z=3\text{m}$) | $0.999998 \times 10^{-4}\text{ m}$ | $1.000000 \times 10^{-4}\text{ m}$ | **0.0002 %** |
+| **Vertical Stress $\sigma_{zz}$** | Central Point #1880 ($z=3\text{m}$) | $99.9999\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0001 %** |
+| **Lateral Stress $\sigma_{xx}$** | Central Point #1880 ($z=3\text{m}$) | $33.3333\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0000 %** |
+| **Lateral Stress $\sigma_{yy}$** | Central Point #1880 ($z=3\text{m}$) | $33.3333\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0000 %** |
+| **Von Mises Stress $\sigma_{vm}$** | Central Point #1880 ($z=3\text{m}$) | $66.6666\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0002 %** |
+| **Mean / Max $u_z$ Error** | **All 1,965 Internal Points** ($d \ge 0.073\text{m}$) | — | — | **0.0003 % / 0.0031 %** |
+| **Mean $\sigma_{zz}$** | **All 1,965 Internal Points** | $100.0002 \pm 0.0158\text{ Pa}$ | $100.0000\text{ Pa}$ | **0.0002 %** |
+| **Mean $\sigma_{xx}$** | **All 1,965 Internal Points** | $33.3331 \pm 0.0150\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0006 %** |
+| **Mean $\sigma_{yy}$** | **All 1,965 Internal Points** | $33.3332 \pm 0.0107\text{ Pa}$ | $33.3333\text{ Pa}$ | **0.0003 %** |
+| **Mean $\sigma_{vm}$** | **All 1,965 Internal Points** | $66.6671 \pm 0.0253\text{ Pa}$ | $66.6667\text{ Pa}$ | **0.0006 %** |
 
 ![Numerical vs Analytical Validation Plot](result_plot.png)
 

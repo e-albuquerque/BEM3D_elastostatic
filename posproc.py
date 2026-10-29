@@ -192,29 +192,17 @@ def main():
         print(f"  Von Mises        = {svm_int[idx_c]:10.4f} Pa  (Analítico: {sig_vm_exact:10.4f} Pa, Erro: {err_svm_c:.4f}%)")
         print("-" * 70)
 
-        # Distância ao contorno e filtragem de interior profundo (> 0.5m)
-        dist_to_bnd = np.minimum.reduce([x_int, L - x_int, y_int, L - y_int, z_int, L - z_int])
-        interior_mask = dist_to_bnd > 0.5
-        n_deep = np.sum(interior_mask)
-
-        # Erros relativos de deslocamento para z > 0.05m
+        # Erros relativos de deslocamento para z > 0.05m (todos os pontos internos)
         mask_z = z_int > 0.05
         uz_exact_all = (p / M) * z_int
         err_uz_all = np.abs(uz_int[mask_z] - uz_exact_all[mask_z]) / uz_exact_all[mask_z] * 100.0
 
-        print(f"Estatísticas dos Pontos Internos ({len(z_int)} pontos no total):")
-        print(f"  u_z:  Erro Médio = {np.mean(err_uz_all):.4f}%, Erro Mediano = {np.median(err_uz_all):.4f}%")
-        print(f"  sigma_zz: Mediana = {np.median(szz_int):.4f} Pa (Analítico: {sig_zz_exact:.2f} Pa)")
-        print(f"  sigma_xx: Mediana = {np.median(sxx_int):.4f} Pa (Analítico: {sig_xx_exact:.2f} Pa)")
-        print(f"  sigma_yy: Mediana = {np.median(syy_int):.4f} Pa (Analítico: {sig_yy_exact:.2f} Pa)")
-        print(f"  Von Mises: Mediana = {np.median(svm_int):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
-        print(f"Estatísticas no Interior Profundo (distância ao contorno > 0.5m, {n_deep} pontos):")
-        err_uz_deep = np.abs(uz_int[interior_mask] - uz_exact_all[interior_mask]) / uz_exact_all[interior_mask] * 100.0
-        print(f"  u_z:       Erro Médio = {np.mean(err_uz_deep):.4f}%")
-        print(f"  sigma_zz:  Média = {np.mean(szz_int[interior_mask]):.4f} +/- {np.std(szz_int[interior_mask]):.4f} Pa (Analítico: {sig_zz_exact:.2f} Pa)")
-        print(f"  sigma_xx:  Média = {np.mean(sxx_int[interior_mask]):.4f} +/- {np.std(sxx_int[interior_mask]):.4f} Pa (Analítico: {sig_xx_exact:.2f} Pa)")
-        print(f"  sigma_yy:  Média = {np.mean(syy_int[interior_mask]):.4f} +/- {np.std(syy_int[interior_mask]):.4f} Pa (Analítico: {sig_yy_exact:.2f} Pa)")
-        print(f"  Von Mises: Média = {np.mean(svm_int[interior_mask]):.4f} +/- {np.std(svm_int[interior_mask]):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
+        print(f"Estatísticas Globais de TODOS os Pontos Internos ({len(z_int)} pontos, incluindo próximos ao contorno):")
+        print(f"  u_z:       Erro Médio = {np.mean(err_uz_all):.5f}%, Erro Máx = {np.max(err_uz_all):.5f}%")
+        print(f"  sigma_zz:  Média = {np.mean(szz_int):.4f} +/- {np.std(szz_int):.4f} Pa (Analítico: {sig_zz_exact:.2f} Pa)")
+        print(f"  sigma_xx:  Média = {np.mean(sxx_int):.4f} +/- {np.std(sxx_int):.4f} Pa (Analítico: {sig_xx_exact:.2f} Pa)")
+        print(f"  sigma_yy:  Média = {np.mean(syy_int):.4f} +/- {np.std(syy_int):.4f} Pa (Analítico: {sig_yy_exact:.2f} Pa)")
+        print(f"  Von Mises: Média = {np.mean(svm_int):.4f} +/- {np.std(svm_int):.4f} Pa (Analítico: {sig_vm_exact:.2f} Pa)")
         print("-" * 70)
 
     # 4. Carrega e valida tensões de contorno (stresses.dat)
@@ -267,9 +255,9 @@ def main():
 
     if has_int_pts:
         ax1.scatter(uz_int * 1e4, z_int, color='mediumseagreen', s=12, alpha=0.35, label=f'Pontos Internos ({len(z_int)} pts)')
-        ax1.plot(uz_int[idx_c] * 1e4, zc, '^', color='forestgreen', markersize=9, label=f'Centro Interno ({zc:.2f}m, erro={err_uz_c:.3f}%)')
+        ax1.plot(uz_int[idx_c] * 1e4, zc, '^', color='forestgreen', markersize=9, label=f'Centro Interno ({zc:.2f}m, erro={err_uz_c:.4f}%)')
 
-    ax1.plot(uz_num * 1e4, L, 's', color='darkblue', markersize=9, label=f'Nó Topo 770 ($z=6$m, erro={err_uz_top:.3f}%)')
+    ax1.plot(uz_num * 1e4, L, 's', color='darkblue', markersize=9, label=f'Nó Topo 770 ($z=6$m, erro={err_uz_top:.4f}%)')
 
     ax1.set_xlabel('Deslocamento Vertical $u_z \\times 10^4$ (m)', fontsize=11)
     ax1.set_ylabel('Cota $Z$ (m)', fontsize=11)
@@ -284,11 +272,11 @@ def main():
         szz_nodes = stresses[:, 6]
         ax2.scatter(z_nodes, szz_nodes, color='crimson', s=16, alpha=0.4, label=r'Nós de Contorno ($\sigma_{zz}$)')
         if len(row770) > 0:
-            ax2.plot(6.0, szz_770, 's', color='darkred', markersize=9, label=rf'Nó 770 ({szz_770:.2f} Pa, erro={err_szz:.3f}%)')
+            ax2.plot(6.0, szz_770, 's', color='darkred', markersize=9, label=rf'Nó 770 ({szz_770:.2f} Pa, erro={err_szz:.4f}%)')
 
     if has_int_pts:
-        ax2.scatter(z_int[interior_mask], szz_int[interior_mask], color='mediumpurple', s=12, alpha=0.45, label=rf'Pontos Internos ($d>0.5$m, $\mu$={np.mean(szz_int[interior_mask]):.2f} Pa)')
-        ax2.plot(zc, szz_int[idx_c], '^', color='darkmagenta', markersize=9, label=rf'Centro ({szz_int[idx_c]:.2f} Pa, erro={err_szz_c:.3f}%)')
+        ax2.scatter(z_int, szz_int, color='mediumpurple', s=12, alpha=0.45, label=rf'Pontos Internos ({len(z_int)} pts, $\mu$={np.mean(szz_int):.2f} Pa)')
+        ax2.plot(zc, szz_int[idx_c], '^', color='darkmagenta', markersize=9, label=rf'Centro ({szz_int[idx_c]:.2f} Pa, erro={err_szz_c:.4f}%)')
 
     ax2.set_xlabel('Cota $Z$ (m)', fontsize=11)
     ax2.set_ylabel(r'Tensão $\sigma_{zz}$ (Pa)', fontsize=11)
@@ -308,8 +296,8 @@ def main():
             ax3.plot(6.0, sxx_770, 'D', color='blue', markersize=8, label=rf'Nó 770 $\sigma_{{xx}}$ ({sxx_770:.2f} Pa)')
 
     if has_int_pts:
-        ax3.scatter(z_int[interior_mask], sxx_int[interior_mask], color='steelblue', s=10, alpha=0.3, label=rf'$\sigma_{{xx}}$ Internos ($d>0.5$m)')
-        ax3.scatter(z_int[interior_mask], syy_int[interior_mask], color='seagreen', s=10, alpha=0.3, label=rf'$\sigma_{{yy}}$ Internos ($d>0.5$m)')
+        ax3.scatter(z_int, sxx_int, color='steelblue', s=10, alpha=0.3, label=rf'$\sigma_{{xx}}$ Internos ({len(z_int)} pts)')
+        ax3.scatter(z_int, syy_int, color='seagreen', s=10, alpha=0.3, label=rf'$\sigma_{{yy}}$ Internos ({len(z_int)} pts)')
         ax3.plot(zc, sxx_int[idx_c], '^', color='navy', markersize=8, label=rf'Centro $\sigma_{{xx}}$ ({sxx_int[idx_c]:.2f} Pa)')
 
     ax3.set_xlabel('Cota $Z$ (m)', fontsize=11)
@@ -325,11 +313,11 @@ def main():
         svm_nodes = stresses[:, 10]
         ax4.scatter(z_nodes, svm_nodes, color='purple', s=16, alpha=0.4, label=r'$\sigma_{vm}$ (Contorno)')
         if len(row770) > 0:
-            ax4.plot(6.0, svm_770, '*', color='indigo', markersize=11, label=rf'Nó 770 $\sigma_{{vm}}$ ({svm_770:.2f} Pa, erro={err_svm:.3f}%)')
+            ax4.plot(6.0, svm_770, '*', color='indigo', markersize=11, label=rf'Nó 770 $\sigma_{{vm}}$ ({svm_770:.2f} Pa, erro={err_svm:.4f}%)')
 
     if has_int_pts:
-        ax4.scatter(z_int[interior_mask], svm_int[interior_mask], color='darkorange', s=12, alpha=0.4, label=rf'$\sigma_{{vm}}$ Internos ($d>0.5$m, $\mu$={np.mean(svm_int[interior_mask]):.2f} Pa)')
-        ax4.plot(zc, svm_int[idx_c], '^', color='chocolate', markersize=9, label=rf'Centro ({svm_int[idx_c]:.2f} Pa, erro={err_svm_c:.3f}%)')
+        ax4.scatter(z_int, svm_int, color='darkorange', s=12, alpha=0.4, label=rf'$\sigma_{{vm}}$ Internos ({len(z_int)} pts, $\mu$={np.mean(svm_int):.2f} Pa)')
+        ax4.plot(zc, svm_int[idx_c], '^', color='chocolate', markersize=9, label=rf'Centro ({svm_int[idx_c]:.2f} Pa, erro={err_svm_c:.4f}%)')
 
     ax4.set_xlabel('Cota $Z$ (m)', fontsize=11)
     ax4.set_ylabel(r'Tensão de Von Mises $\sigma_{vm}$ (Pa)', fontsize=11)

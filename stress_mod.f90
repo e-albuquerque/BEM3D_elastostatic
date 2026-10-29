@@ -468,32 +468,76 @@ contains
   end subroutine output_boundary_stresses
 
   !=============================================================================
+  ! gauss_legendre_1d
+  ! Computes 1D Gauss-Legendre quadrature nodes and weights on [-1, 1]
+  ! for arbitrary order n_pts using Newton-Raphson on Legendre polynomials
+  !=============================================================================
+  subroutine gauss_legendre_1d(n_pts, x_gl, w_gl)
+    implicit none
+    integer, intent(in) :: n_pts
+    real(dp), intent(out) :: x_gl(n_pts), w_gl(n_pts)
+    integer :: i, j, m_half, iter
+    real(dp) :: z, z1, p1, p2, p3, pp
+
+    m_half = (n_pts + 1) / 2
+    do i = 1, m_half
+      z = cos(pi * (real(i, dp) - 0.25_dp) / (real(n_pts, dp) + 0.5_dp))
+      do iter = 1, 100
+        p1 = 1.0_dp
+        p2 = 0.0_dp
+        do j = 1, n_pts
+          p3 = p2
+          p2 = p1
+          p1 = ((2.0_dp * real(j, dp) - 1.0_dp) * z * p2 - real(j - 1, dp) * p3) / real(j, dp)
+        end do
+        pp = real(n_pts, dp) * (z * p1 - p2) / (z * z - 1.0_dp)
+        z1 = z
+        z = z1 - p1 / pp
+        if (abs(z - z1) <= 1.0e-15_dp) exit
+      end do
+      x_gl(i) = -z
+      x_gl(n_pts + 1 - i) = z
+      w_gl(i) = 2.0_dp / ((1.0_dp - z * z) * pp * pp)
+      w_gl(n_pts + 1 - i) = w_gl(i)
+    end do
+  end subroutine gauss_legendre_1d
+
+  !=============================================================================
   ! compute_internal_points
   ! Evaluates displacements and Cauchy stresses at all internal points
-  ! using Somigliana displacement and stress identities with OpenMP parallelization
+  ! using Somigliana displacement and stress identities with OpenMP
+  ! and adaptive high-order Gauss quadrature (40x40) for quasi-singular elements
   !=============================================================================
   subroutine compute_internal_points()
     implicit none
-    integer :: ip, ie, k, m, ik, ncone, npg, i, j, igp, tot_gp
-    real(dp) :: wg, ff_val
-    real(dp) :: ug(3), tg(3)
+    integer, parameter :: npg_near = 40
+    integer :: ip, ie, k, m, ik, ncone, npg, i, j, igp, tot_gp_far, tot_gp_near
+    integer :: g_start, g_end
+    real(dp) :: wg, ff_val, g1, g2, tri_jac
+    real(dp) :: ug(3), tg(3), xj1(9), xj2(9), xj3(9)
+    real(dp) :: ff_loc(9), fd1_loc(9), fd2_loc(9)
+    real(dp) :: dx1(3), dx2(3), cross_v(3), jac_fine, xg_fine(3), nrm_fine(3)
+    real(dp) :: x_gl_near(npg_near), w_gl_near(npg_near)
+    real(dp) :: dist_c2
 
-    ! Flattened Gauss point arrays
+    ! Element centroids, characteristic size, and Gauss index ranges
+    real(dp), allocatable :: el_cx(:), el_cy(:), el_cz(:), el_r2_thresh(:)
+    integer, allocatable :: far_start(:), far_end(:), near_start(:), near_end(:)
+
+    ! Flattened Gauss point arrays (far-field 6x6 and near-field 40x40)
     real(dp), allocatable :: gp_x(:), gp_y(:), gp_z(:)
     real(dp), allocatable :: gp_nx(:), gp_ny(:), gp_nz(:)
     real(dp), allocatable :: gp_u(:,:), gp_t(:,:)
 
+    real(dp), allocatable :: fn_x(:), fn_y(:), fn_z(:)
+    real(dp), allocatable :: fn_nx(:), fn_ny(:), fn_nz(:)
+    real(dp), allocatable :: fn_u(:,:), fn_t(:,:)
+
     ! Loop variables for internal points
     real(dp) :: xi_x, xi_y, xi_z
-    real(dp) :: rx, ry, rz, r2, r, inv_r, inv_r2, inv_r3
-    real(dp) :: rd1, rd2, rd3, n1, n2, n3, rdn
-    real(dp) :: tu1, tu2, tu3, tt1, tt2, tt3
-    real(dp) :: rdt, rdu, nu_val
-    real(dp) :: fac_U, fac_T, fac_D, fac_S
     real(dp) :: u_tmp(3), sig_tmp(6)
-    real(dp) :: D_xx, D_yy, D_zz, D_xy, D_yz, D_zx
-    real(dp) :: S_xx, S_yy, S_zz, S_xy, S_yz, S_zx
     real(dp) :: c4, c6, pr4, nu, const_U, const_T, const_D, const_S
+    real(dp) :: dmax2, dx_n, dy_n, dz_n
 
     if (l <= 0) return
 
@@ -509,30 +553,63 @@ contains
     sigma_int_prin = 0.0_dp
     sigma_int_vm = 0.0_dp
 
-    ! 1. Count total Gauss points across all boundary elements
-    tot_gp = 0
+    allocate(el_cx(ne), el_cy(ne), el_cz(ne), el_r2_thresh(ne))
+    allocate(far_start(ne), far_end(ne), near_start(ne), near_end(ne))
+
+    ! 1. Count far-field (6x6 / 4x4) and near-field (40x40) Gauss points
+    tot_gp_far = 0
     do ie = 1, ne
       if (nconec(ie) == 9) then
-        tot_gp = tot_gp + 36
+        tot_gp_far = tot_gp_far + 36
       else
-        tot_gp = tot_gp + 16
+        tot_gp_far = tot_gp_far + 16
       end if
     end do
+    tot_gp_near = ne * npg_near * npg_near
 
-    allocate(gp_x(tot_gp), gp_y(tot_gp), gp_z(tot_gp))
-    allocate(gp_nx(tot_gp), gp_ny(tot_gp), gp_nz(tot_gp))
-    allocate(gp_u(3, tot_gp), gp_t(3, tot_gp))
+    allocate(gp_x(tot_gp_far), gp_y(tot_gp_far), gp_z(tot_gp_far))
+    allocate(gp_nx(tot_gp_far), gp_ny(tot_gp_far), gp_nz(tot_gp_far))
+    allocate(gp_u(3, tot_gp_far), gp_t(3, tot_gp_far))
 
-    ! 2. Precompute Gauss point positions, normals, and weighted field values (u * dGamma, t * dGamma)
+    allocate(fn_x(tot_gp_near), fn_y(tot_gp_near), fn_z(tot_gp_near))
+    allocate(fn_nx(tot_gp_near), fn_ny(tot_gp_near), fn_nz(tot_gp_near))
+    allocate(fn_u(3, tot_gp_near), fn_t(3, tot_gp_near))
+
+    call gauss_legendre_1d(npg_near, x_gl_near, w_gl_near)
+
+    ! 2a. Precompute coarse far-field Gauss points and element centroids/thresholds
     igp = 0
     do ie = 1, ne
       ncone = nconec(ie)
+      el_cx(ie) = 0.0_dp; el_cy(ie) = 0.0_dp; el_cz(ie) = 0.0_dp
+      do m = 1, ncone
+        ik = kconec(m, ie)
+        xj1(m) = x(ik); xj2(m) = y(ik); xj3(m) = z(ik)
+        el_cx(ie) = el_cx(ie) + xj1(m)
+        el_cy(ie) = el_cy(ie) + xj2(m)
+        el_cz(ie) = el_cz(ie) + xj3(m)
+      end do
+      el_cx(ie) = el_cx(ie) / real(ncone, dp)
+      el_cy(ie) = el_cy(ie) / real(ncone, dp)
+      el_cz(ie) = el_cz(ie) / real(ncone, dp)
+
+      dmax2 = 0.0_dp
+      do m = 1, ncone
+        dx_n = xj1(m) - el_cx(ie)
+        dy_n = xj2(m) - el_cy(ie)
+        dz_n = xj3(m) - el_cz(ie)
+        dmax2 = max(dmax2, dx_n*dx_n + dy_n*dy_n + dz_n*dz_n)
+      end do
+      ! Near-field threshold: distance to element centroid <= 3.5 * element radius (~2.5 * L_e)
+      el_r2_thresh(ie) = (3.5_dp**2) * dmax2
+
       if (ncone == 9) then
         npg = 6
       else
         npg = 4
       end if
 
+      far_start(ie) = igp + 1
       do i = 1, npg
         do j = 1, npg
           k = npg * (i - 1) + j
@@ -570,7 +647,83 @@ contains
           gp_t(:, igp) = tg(:) * wg
         end do
       end do
+      far_end(ie) = igp
     end do
+
+    ! 2b. Precompute fine near-field (40x40) Gauss points in parallel across elements
+    do ie = 1, ne
+      near_start(ie) = (ie - 1) * npg_near * npg_near + 1
+      near_end(ie)   = ie * npg_near * npg_near
+    end do
+
+    !$omp parallel do private(ie, ncone, m, ik, xj1, xj2, xj3, i, j, igp, g1, g2, tri_jac, &
+    !$omp& ff_loc, fd1_loc, fd2_loc, xg_fine, dx1, dx2, cross_v, jac_fine, nrm_fine, wg, ug, tg, ff_val)
+    do ie = 1, ne
+      ncone = nconec(ie)
+      do m = 1, ncone
+        ik = kconec(m, ie)
+        xj1(m) = x(ik); xj2(m) = y(ik); xj3(m) = z(ik)
+      end do
+
+      do i = 1, npg_near
+        do j = 1, npg_near
+          igp = near_start(ie) + (i - 1) * npg_near + (j - 1)
+
+          if (ncone == 9) then
+            g1 = x_gl_near(i)
+            g2 = x_gl_near(j)
+            tri_jac = 1.0_dp
+          else
+            ! Duffy mapping from [-1,1]^2 to unit triangle (g1 >= 0, g2 >= 0, g1+g2 <= 1)
+            g1 = 0.5_dp * (1.0_dp + x_gl_near(i))
+            g2 = 0.25_dp * (1.0_dp - x_gl_near(i)) * (1.0_dp + x_gl_near(j))
+            tri_jac = 0.125_dp * (1.0_dp - x_gl_near(i))
+          end if
+
+          call shape_deriv_lagrange(ncone, g1, g2, ff_loc, fd1_loc, fd2_loc)
+
+          xg_fine = 0.0_dp; dx1 = 0.0_dp; dx2 = 0.0_dp
+          ug = 0.0_dp; tg = 0.0_dp
+          do m = 1, ncone
+            ik = kconec(m, ie)
+            ff_val = ff_loc(m)
+            xg_fine(1) = xg_fine(1) + ff_val * xj1(m)
+            xg_fine(2) = xg_fine(2) + ff_val * xj2(m)
+            xg_fine(3) = xg_fine(3) + ff_val * xj3(m)
+
+            dx1(1) = dx1(1) + fd1_loc(m) * xj1(m)
+            dx1(2) = dx1(2) + fd1_loc(m) * xj2(m)
+            dx1(3) = dx1(3) + fd1_loc(m) * xj3(m)
+
+            dx2(1) = dx2(1) + fd2_loc(m) * xj1(m)
+            dx2(2) = dx2(2) + fd2_loc(m) * xj2(m)
+            dx2(3) = dx2(3) + fd2_loc(m) * xj3(m)
+
+            ug(1) = ug(1) + ff_val * FI(3*ik - 2)
+            ug(2) = ug(2) + ff_val * FI(3*ik - 1)
+            ug(3) = ug(3) + ff_val * FI(3*ik)
+
+            tg(1) = tg(1) + ff_val * DFI(3*m - 2, ie)
+            tg(2) = tg(2) + ff_val * DFI(3*m - 1, ie)
+            tg(3) = tg(3) + ff_val * DFI(3*m,     ie)
+          end do
+
+          cross_v(1) = dx1(2)*dx2(3) - dx1(3)*dx2(2)
+          cross_v(2) = dx1(3)*dx2(1) - dx1(1)*dx2(3)
+          cross_v(3) = dx1(1)*dx2(2) - dx1(2)*dx2(1)
+          jac_fine = sqrt(cross_v(1)**2 + cross_v(2)**2 + cross_v(3)**2)
+          nrm_fine = cross_v / jac_fine
+
+          wg = w_gl_near(i) * w_gl_near(j) * tri_jac * jac_fine
+
+          fn_x(igp) = xg_fine(1); fn_y(igp) = xg_fine(2); fn_z(igp) = xg_fine(3)
+          fn_nx(igp) = nrm_fine(1); fn_ny(igp) = nrm_fine(2); fn_nz(igp) = nrm_fine(3)
+          fn_u(:, igp) = ug(:) * wg
+          fn_t(:, igp) = tg(:) * wg
+        end do
+      end do
+    end do
+    !$omp end parallel do
 
     ! Fundamental constants for Kelvin kernels
     nu = xnu
@@ -583,11 +736,8 @@ contains
     const_D = 1.0_dp / (8.0_dp * pi * (1.0_dp - nu))
     const_S = rge / (4.0_dp * pi * (1.0_dp - nu))
 
-    ! 3. Compute internal points displacements and stresses in parallel
-    !$omp parallel do private(ip, xi_x, xi_y, xi_z, igp, rx, ry, rz, r2, r, inv_r, inv_r2, inv_r3, &
-    !$omp& rd1, rd2, rd3, n1, n2, n3, rdn, tu1, tu2, tu3, tt1, tt2, tt3, rdt, rdu, nu_val, &
-    !$omp& fac_U, fac_T, fac_D, fac_S, u_tmp, sig_tmp, D_xx, D_yy, D_zz, D_xy, D_yz, D_zx, &
-    !$omp& S_xx, S_yy, S_zz, S_xy, S_yz, S_zx) schedule(guided)
+    ! 3. Compute internal points displacements and stresses in parallel (adaptive quadrature)
+    !$omp parallel do private(ip, xi_x, xi_y, xi_z, ie, dist_c2, g_start, g_end, u_tmp, sig_tmp) schedule(guided)
     do ip = 1, l
       xi_x = cx(ip)
       xi_y = cy(ip)
@@ -596,88 +746,21 @@ contains
       u_tmp = 0.0_dp
       sig_tmp = 0.0_dp
 
-      do igp = 1, tot_gp
-        rx = gp_x(igp) - xi_x
-        ry = gp_y(igp) - xi_y
-        rz = gp_z(igp) - xi_z
-
-        r2 = rx*rx + ry*ry + rz*rz
-        r = sqrt(r2)
-        inv_r = 1.0_dp / r
-        inv_r2 = inv_r * inv_r
-        inv_r3 = inv_r2 * inv_r
-
-        rd1 = rx * inv_r
-        rd2 = ry * inv_r
-        rd3 = rz * inv_r
-
-        n1 = gp_nx(igp)
-        n2 = gp_ny(igp)
-        n3 = gp_nz(igp)
-
-        rdn = rd1*n1 + rd2*n2 + rd3*n3
-
-        tu1 = gp_u(1, igp); tu2 = gp_u(2, igp); tu3 = gp_u(3, igp)
-        tt1 = gp_t(1, igp); tt2 = gp_t(2, igp); tt3 = gp_t(3, igp)
-
-        rdt = rd1*tt1 + rd2*tt2 + rd3*tt3
-        rdu = rd1*tu1 + rd2*tu2 + rd3*tu3
-        nu_val = n1*tu1 + n2*tu2 + n3*tu3
-
-        ! Displacement kernels: U* and T*
-        fac_U = const_U * inv_r
-        fac_T = const_T * inv_r2
-
-        ! u_i += U_ik * t_k - T_ik * u_k
-        u_tmp(1) = u_tmp(1) + fac_U * (c4 * tt1 + rd1 * rdt) - &
-                              fac_T * (rdn * (c6 * tu1 + 3.0_dp * rd1 * rdu) + c6 * (nu_val * rd1 - n1 * rdu))
-        u_tmp(2) = u_tmp(2) + fac_U * (c4 * tt2 + rd2 * rdt) - &
-                              fac_T * (rdn * (c6 * tu2 + 3.0_dp * rd2 * rdu) + c6 * (nu_val * rd2 - n2 * rdu))
-        u_tmp(3) = u_tmp(3) + fac_U * (c4 * tt3 + rd3 * rdt) - &
-                              fac_T * (rdn * (c6 * tu3 + 3.0_dp * rd3 * rdu) + c6 * (nu_val * rd3 - n3 * rdu))
-
-        ! Stress kernels: D* and S*
-        fac_D = const_D * inv_r2
-        fac_S = const_S * inv_r3
-
-        D_xx = fac_D * (c6 * (2.0_dp * tt1 * rd1 - rdt) + 3.0_dp * rd1 * rd1 * rdt)
-        D_yy = fac_D * (c6 * (2.0_dp * tt2 * rd2 - rdt) + 3.0_dp * rd2 * rd2 * rdt)
-        D_zz = fac_D * (c6 * (2.0_dp * tt3 * rd3 - rdt) + 3.0_dp * rd3 * rd3 * rdt)
-        D_xy = fac_D * (c6 * (tt1 * rd2 + tt2 * rd1)    + 3.0_dp * rd1 * rd2 * rdt)
-        D_yz = fac_D * (c6 * (tt2 * rd3 + tt3 * rd2)    + 3.0_dp * rd2 * rd3 * rdt)
-        D_zx = fac_D * (c6 * (tt3 * rd1 + tt1 * rd3)    + 3.0_dp * rd3 * rd1 * rdt)
-
-        S_xx = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu1 * rd1 - 5.0_dp * rd1 * rd1 * rdu) + &
-                        6.0_dp * nu * rdu * n1 * rd1 + c6 * (3.0_dp * nu_val * rd1 * rd1 + 2.0_dp * n1 * tu1) - &
-                        pr4 * nu_val)
-
-        S_yy = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu2 * rd2 - 5.0_dp * rd2 * rd2 * rdu) + &
-                        6.0_dp * nu * rdu * n2 * rd2 + c6 * (3.0_dp * nu_val * rd2 * rd2 + 2.0_dp * n2 * tu2) - &
-                        pr4 * nu_val)
-
-        S_zz = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu3 * rd3 - 5.0_dp * rd3 * rd3 * rdu) + &
-                        6.0_dp * nu * rdu * n3 * rd3 + c6 * (3.0_dp * nu_val * rd3 * rd3 + 2.0_dp * n3 * tu3) - &
-                        pr4 * nu_val)
-
-        S_xy = fac_S * (3.0_dp * rdn * (nu * (tu1 * rd2 + tu2 * rd1) - 5.0_dp * rd1 * rd2 * rdu) + &
-                        3.0_dp * nu * rdu * (n1 * rd2 + n2 * rd1) + &
-                        c6 * (3.0_dp * nu_val * rd1 * rd2 + n1 * tu2 + n2 * tu1))
-
-        S_yz = fac_S * (3.0_dp * rdn * (nu * (tu2 * rd3 + tu3 * rd2) - 5.0_dp * rd2 * rd3 * rdu) + &
-                        3.0_dp * nu * rdu * (n2 * rd3 + n3 * rd2) + &
-                        c6 * (3.0_dp * nu_val * rd2 * rd3 + n2 * tu3 + n3 * tu2))
-
-        S_zx = fac_S * (3.0_dp * rdn * (nu * (tu3 * rd1 + tu1 * rd3) - 5.0_dp * rd3 * rd1 * rdu) + &
-                        3.0_dp * nu * rdu * (n3 * rd1 + n1 * rd3) + &
-                        c6 * (3.0_dp * nu_val * rd3 * rd1 + n3 * tu1 + n1 * tu3))
-
-        ! sigma_ij += D_kij * t_k - S_kij * u_k
-        sig_tmp(1) = sig_tmp(1) + (D_xx - S_xx)
-        sig_tmp(2) = sig_tmp(2) + (D_yy - S_yy)
-        sig_tmp(3) = sig_tmp(3) + (D_zz - S_zz)
-        sig_tmp(4) = sig_tmp(4) + (D_xy - S_xy)
-        sig_tmp(5) = sig_tmp(5) + (D_yz - S_yz)
-        sig_tmp(6) = sig_tmp(6) + (D_zx - S_zx)
+      do ie = 1, ne
+        dist_c2 = (xi_x - el_cx(ie))**2 + (xi_y - el_cy(ie))**2 + (xi_z - el_cz(ie))**2
+        if (dist_c2 > el_r2_thresh(ie)) then
+          g_start = far_start(ie)
+          g_end   = far_end(ie)
+          call accumulate_somigliana_range(g_start, g_end, gp_x, gp_y, gp_z, gp_nx, gp_ny, gp_nz, &
+               gp_u, gp_t, xi_x, xi_y, xi_z, nu, c4, c6, pr4, const_U, const_T, const_D, const_S, &
+               u_tmp, sig_tmp)
+        else
+          g_start = near_start(ie)
+          g_end   = near_end(ie)
+          call accumulate_somigliana_range(g_start, g_end, fn_x, fn_y, fn_z, fn_nx, fn_ny, fn_nz, &
+               fn_u, fn_t, xi_x, xi_y, xi_z, nu, c4, c6, pr4, const_U, const_T, const_D, const_S, &
+               u_tmp, sig_tmp)
+        end if
       end do
 
       u_int(1:3, ip) = u_tmp(1:3)
@@ -692,8 +775,115 @@ contains
     end do
     !$omp end parallel do
 
+    deallocate(el_cx, el_cy, el_cz, el_r2_thresh, far_start, far_end, near_start, near_end)
     deallocate(gp_x, gp_y, gp_z, gp_nx, gp_ny, gp_nz, gp_u, gp_t)
+    deallocate(fn_x, fn_y, fn_z, fn_nx, fn_ny, fn_nz, fn_u, fn_t)
   end subroutine compute_internal_points
+
+  !=============================================================================
+  ! accumulate_somigliana_range
+  ! Accumulates Somigliana displacement and Cauchy stress contributions over
+  ! a contiguous slice [g_start, g_end] of pre-weighted Gauss points
+  !=============================================================================
+  pure subroutine accumulate_somigliana_range(g_start, g_end, gx, gy, gz, gnx, gny, gnz, &
+       gu, gt, xi_x, xi_y, xi_z, nu, c4, c6, pr4, const_U, const_T, const_D, const_S, &
+       u_acc, sig_acc)
+    implicit none
+    integer, intent(in) :: g_start, g_end
+    real(dp), intent(in) :: gx(:), gy(:), gz(:), gnx(:), gny(:), gnz(:)
+    real(dp), intent(in) :: gu(:,:), gt(:,:)
+    real(dp), intent(in) :: xi_x, xi_y, xi_z, nu, c4, c6, pr4
+    real(dp), intent(in) :: const_U, const_T, const_D, const_S
+    real(dp), intent(inout) :: u_acc(3), sig_acc(6)
+
+    integer :: igp
+    real(dp) :: rx, ry, rz, r2, r, inv_r, inv_r2, inv_r3
+    real(dp) :: rd1, rd2, rd3, n1, n2, n3, rdn
+    real(dp) :: tu1, tu2, tu3, tt1, tt2, tt3, rdt, rdu, nu_val
+    real(dp) :: fac_U, fac_T, fac_D, fac_S
+    real(dp) :: D_xx, D_yy, D_zz, D_xy, D_yz, D_zx
+    real(dp) :: S_xx, S_yy, S_zz, S_xy, S_yz, S_zx
+
+    do igp = g_start, g_end
+      rx = gx(igp) - xi_x
+      ry = gy(igp) - xi_y
+      rz = gz(igp) - xi_z
+
+      r2 = rx*rx + ry*ry + rz*rz
+      r = sqrt(r2)
+      inv_r = 1.0_dp / r
+      inv_r2 = inv_r * inv_r
+      inv_r3 = inv_r2 * inv_r
+
+      rd1 = rx * inv_r
+      rd2 = ry * inv_r
+      rd3 = rz * inv_r
+
+      n1 = gnx(igp)
+      n2 = gny(igp)
+      n3 = gnz(igp)
+
+      rdn = rd1*n1 + rd2*n2 + rd3*n3
+
+      tu1 = gu(1, igp); tu2 = gu(2, igp); tu3 = gu(3, igp)
+      tt1 = gt(1, igp); tt2 = gt(2, igp); tt3 = gt(3, igp)
+
+      rdt = rd1*tt1 + rd2*tt2 + rd3*tt3
+      rdu = rd1*tu1 + rd2*tu2 + rd3*tu3
+      nu_val = n1*tu1 + n2*tu2 + n3*tu3
+
+      fac_U = const_U * inv_r
+      fac_T = const_T * inv_r2
+
+      u_acc(1) = u_acc(1) + fac_U * (c4 * tt1 + rd1 * rdt) - &
+                            fac_T * (rdn * (c6 * tu1 + 3.0_dp * rd1 * rdu) + c6 * (nu_val * rd1 - n1 * rdu))
+      u_acc(2) = u_acc(2) + fac_U * (c4 * tt2 + rd2 * rdt) - &
+                            fac_T * (rdn * (c6 * tu2 + 3.0_dp * rd2 * rdu) + c6 * (nu_val * rd2 - n2 * rdu))
+      u_acc(3) = u_acc(3) + fac_U * (c4 * tt3 + rd3 * rdt) - &
+                            fac_T * (rdn * (c6 * tu3 + 3.0_dp * rd3 * rdu) + c6 * (nu_val * rd3 - n3 * rdu))
+
+      fac_D = const_D * inv_r2
+      fac_S = const_S * inv_r3
+
+      D_xx = fac_D * (c6 * (2.0_dp * tt1 * rd1 - rdt) + 3.0_dp * rd1 * rd1 * rdt)
+      D_yy = fac_D * (c6 * (2.0_dp * tt2 * rd2 - rdt) + 3.0_dp * rd2 * rd2 * rdt)
+      D_zz = fac_D * (c6 * (2.0_dp * tt3 * rd3 - rdt) + 3.0_dp * rd3 * rd3 * rdt)
+      D_xy = fac_D * (c6 * (tt1 * rd2 + tt2 * rd1)    + 3.0_dp * rd1 * rd2 * rdt)
+      D_yz = fac_D * (c6 * (tt2 * rd3 + tt3 * rd2)    + 3.0_dp * rd2 * rd3 * rdt)
+      D_zx = fac_D * (c6 * (tt3 * rd1 + tt1 * rd3)    + 3.0_dp * rd3 * rd1 * rdt)
+
+      S_xx = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu1 * rd1 - 5.0_dp * rd1 * rd1 * rdu) + &
+                      6.0_dp * nu * rdu * n1 * rd1 + c6 * (3.0_dp * nu_val * rd1 * rd1 + 2.0_dp * n1 * tu1) - &
+                      pr4 * nu_val)
+
+      S_yy = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu2 * rd2 - 5.0_dp * rd2 * rd2 * rdu) + &
+                      6.0_dp * nu * rdu * n2 * rd2 + c6 * (3.0_dp * nu_val * rd2 * rd2 + 2.0_dp * n2 * tu2) - &
+                      pr4 * nu_val)
+
+      S_zz = fac_S * (3.0_dp * rdn * (c6 * rdu + 2.0_dp * nu * tu3 * rd3 - 5.0_dp * rd3 * rd3 * rdu) + &
+                      6.0_dp * nu * rdu * n3 * rd3 + c6 * (3.0_dp * nu_val * rd3 * rd3 + 2.0_dp * n3 * tu3) - &
+                      pr4 * nu_val)
+
+      S_xy = fac_S * (3.0_dp * rdn * (nu * (tu1 * rd2 + tu2 * rd1) - 5.0_dp * rd1 * rd2 * rdu) + &
+                      3.0_dp * nu * rdu * (n1 * rd2 + n2 * rd1) + &
+                      c6 * (3.0_dp * nu_val * rd1 * rd2 + n1 * tu2 + n2 * tu1))
+
+      S_yz = fac_S * (3.0_dp * rdn * (nu * (tu2 * rd3 + tu3 * rd2) - 5.0_dp * rd2 * rd3 * rdu) + &
+                      3.0_dp * nu * rdu * (n2 * rd3 + n3 * rd2) + &
+                      c6 * (3.0_dp * nu_val * rd2 * rd3 + n2 * tu3 + n3 * tu2))
+
+      S_zx = fac_S * (3.0_dp * rdn * (nu * (tu3 * rd1 + tu1 * rd3) - 5.0_dp * rd3 * rd1 * rdu) + &
+                      3.0_dp * nu * rdu * (n3 * rd1 + n1 * rd3) + &
+                      c6 * (3.0_dp * nu_val * rd3 * rd1 + n3 * tu1 + n1 * tu3))
+
+      sig_acc(1) = sig_acc(1) + (D_xx - S_xx)
+      sig_acc(2) = sig_acc(2) + (D_yy - S_yy)
+      sig_acc(3) = sig_acc(3) + (D_zz - S_zz)
+      sig_acc(4) = sig_acc(4) + (D_xy - S_xy)
+      sig_acc(5) = sig_acc(5) + (D_yz - S_yz)
+      sig_acc(6) = sig_acc(6) + (D_zx - S_zx)
+    end do
+  end subroutine accumulate_somigliana_range
 
   !=============================================================================
   ! output_internal_points

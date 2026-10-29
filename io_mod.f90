@@ -5,25 +5,30 @@ module io_mod
 
 contains
 
-  subroutine read_bc_line(unit_num, ie, kode_val, vals, n_pts)
+  subroutine read_bc_line(unit_num, ie, kode_val, vals)
     implicit none
-    integer, intent(in) :: unit_num, n_pts
+    integer, intent(in) :: unit_num
     integer, intent(out) :: ie, kode_val
-    real(dp), intent(out) :: vals(n_pts)
+    real(dp), intent(out) :: vals(9)
     character(len=512) :: line
     real(dp) :: temp_pairs(2, 9)
-    integer :: idx, p
+    integer :: idx, p, n_pts
 
+    vals = 0.0_dp
     read(unit_num, '(A)') line
     if (index(line, '(') > 0) then
       ! Handle legacy complex-formatted BC lines: (val_real, val_imag)
       do idx = 1, len_trim(line)
         if (line(idx:idx) == '(' .or. line(idx:idx) == ')') line(idx:idx) = ' '
       end do
+      read(line, *) ie, kode_val
+      n_pts = nconec(ie)
       read(line, *) ie, kode_val, (temp_pairs(1, p), temp_pairs(2, p), p = 1, n_pts)
       vals(1:n_pts) = temp_pairs(1, 1:n_pts)
     else
       ! Handle modern clean real BC lines: val1 val2 ...
+      read(line, *) ie, kode_val
+      n_pts = nconec(ie)
       read(line, *) ie, kode_val, (vals(p), p = 1, n_pts)
     end if
   end subroutine read_bc_line
@@ -31,7 +36,7 @@ contains
   subroutine input_data()
     implicit none
     integer :: in_idx, ie, j, k, i, num_nodes, num_elems, num_pts, ios
-    integer :: dummy_nfr
+    integer :: dummy_nfr, kode_tmp, n_pts_elem
     real(dp) :: in_x, in_y, in_z, dummy_dam, dummy_ro
     real(dp) :: bc_temp(9)
     character(len=512) :: line, dummy_freq_line
@@ -93,7 +98,8 @@ contains
 800 format(//2X, 'BOUNDARY CONDITIONS'//1X, 'ELEMEN', 1X, 'CODE', 22X, 'PRESCRIBED VALUES'/)
     do i = 1, ne
       do k = 1, 3
-        call read_bc_line(inp, ie, kode(3*ie - 3 + k), bc_temp(1:nconec(ie)), nconec(ie))
+        call read_bc_line(inp, ie, kode_tmp, bc_temp)
+        kode(3*ie - 3 + k) = kode_tmp
         do j = 1, nconec(ie)
           bc(3*j - 3 + k, ie) = bc_temp(j)
         end do
